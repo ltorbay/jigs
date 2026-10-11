@@ -18,7 +18,7 @@ A jig holds the work and guides the tool so the cut comes out the same every tim
 | `skills/device-drive` | Android over adb: dev APK, screenshot-and-tap navigation, logcat, save protection, A/B "before" build, stall bisection with shadow marks. |
 | `scripts/test.sh` | The one test command: per-path lock, throwaway `$HOME`, import-if-stale, `--quiet`, `[FAIL]`/`[DONE]` grep contract. |
 | `scripts/spec_index.sh` | Regenerates `openspec/specs/INDEX.md` from each spec's Purpose line. |
-| `tests/meta/` | Minimal runner plus two runnable meta-suites: test registration, spec index freshness. README explains how to adapt. |
+| `tests/meta/` | Minimal runner plus three runnable meta-suites: test registration, spec index freshness, CLAUDE.md budget. README explains how to adapt. |
 | `openspec/config.example.yaml` | The `rules.tasks` mechanism: pre-enumerate test, snapshot and CLAUDE.md edits at planning time so they are pre-authorised at apply time. |
 | `CLAUDE.example.md` | A lean root CLAUDE.md template (under 8 KB) carrying the graduation ladder and the budget. |
 
@@ -46,7 +46,7 @@ Then:
 
 1. Merge `hooks/settings.example.json` into `.claude/settings.json`. The hook commands use `$CLAUDE_PROJECT_DIR`, so the paths above work as-is.
 2. Replace the angle-bracket placeholders in `.claude/protocols/*.md` (`<TEST_COMMAND>`, `<TEST_RUNNER_SCENE>`, `<SPEC_INDEX_TOOL>`), and set `TEST_SCENE` for `tools/test.sh` if your runner is not at `res://scenes/tests/test_runner.tscn`.
-3. Copy `tests/meta/*.gd` into your suites folder, set `SUITE_DIR`, and register both suites in your runner scene (see `tests/meta/README.md`). If you have no runner yet, `tests/meta/test_runner.gd` and `.tscn` are a working minimum.
+3. Copy `tests/meta/*.gd` into your suites folder, set `SUITE_DIR`, and register the three suites in your runner scene (see `tests/meta/README.md`). If you have no runner yet, `tests/meta/test_runner.gd` and `.tscn` are a working minimum.
 4. Run one change through propose → apply → verify → archive and check `.claude/hooks/protocol_inject.log` shows three fires. Delete a test registration on purpose and watch the registration suite fail. Installed.
 
 Nothing here is Godot-specific except `tests/meta`, `scripts/test.sh` and the two device/verify skills; the hooks, protocols, `rules.tasks`, `backfill-spec`, `parallel-apply` and `tech-audit` apply to any project that uses Claude Code and OpenSpec.
@@ -55,7 +55,7 @@ Nothing here is Godot-specific except `tests/meta`, `scripts/test.sh` and the tw
 
 Read these before trusting the rest.
 
-**The CLAUDE.md budget did not hold.** In May 2026 a graduation pass cut root CLAUDE.md from 51.5 KB to 30 KB and set a soft budget of 30 KB / 200 lines, with a ladder for moving rules into tests and per-folder files. At extraction root CLAUDE.md was 162 KB and 371 lines, with one line of 16,700 characters; the per-folder files had grown the same way, the largest to 177 KB. The per-change audit checklist had been appended to a generated command file that `openspec update` regenerates, and no trace of it remained; the budget had no sensor; a second graduation pass was never scheduled. The playbook's section 4 is written from that failure, and the kit now puts the ladder in a surface that survives regeneration and recommends a `wc -c` meta-test from day one.
+**The CLAUDE.md budget did not hold.** In May 2026 a graduation pass cut root CLAUDE.md from 51.5 KB to 30 KB and set a soft budget of 30 KB / 200 lines, with a ladder for moving rules into tests and per-folder files. At extraction root CLAUDE.md was 162 KB and 371 lines, with one line of 16,700 characters; the per-folder files had grown the same way, the largest to 177 KB. The per-change audit checklist had been appended to a generated command file that `openspec update` regenerates, and no trace of it remained; the budget had no sensor; a second graduation pass was never scheduled. The playbook's section 4 is written from that failure, and the kit now puts the ladder in a surface that survives regeneration and ships the missing sensor as a meta-suite (`tests/meta/claude_md_budget_suite.gd`) to run from day one.
 
 **No agent step in CI.** The workflows build, bake, import and run the suite on every push, and ship to the two stores on dispatch. No flaky-test triage, no dependency review, no assisted code review runs in CI. Everything agentic happened in interactive sessions.
 

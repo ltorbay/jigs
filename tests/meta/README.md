@@ -1,6 +1,6 @@
 # tests/meta — a runnable example meta-suite
 
-Two tripwires that test the tests and the specs, not the game, on a minimal copy of the runner contract the source project uses (single headless boot, explicit registration, `[FAIL]`/`[DONE]` output).
+Three tripwires that test the tests, the specs and the instruction file, not the game, on a minimal copy of the runner contract the source project uses (single headless boot, explicit registration, `[FAIL]`/`[DONE]` output).
 
 | File | Role |
 |---|---|
@@ -9,6 +9,7 @@ Two tripwires that test the tests and the specs, not the game, on a minimal copy
 | `test_runner.tscn` | Registration: one child node per suite, string `ext_resource` ids equal to the suite basename (so parallel branches adding suites conflict as a both-keep hunk). |
 | `test_registration_suite.gd` | Scans every `*_suite.gd` for a `func test_*` missing from `get_tests()`. Parser is pure and self-tested. |
 | `spec_index_suite.gd` | Every `openspec/specs/*/spec.md` has an authored Purpose; `INDEX.md` matches, nothing missing or stale. |
+| `claude_md_budget_suite.gd` | Root `CLAUDE.md` exists and stays within 30 KB / 200 lines (the `wc -c` sensor from PLAYBOOK.md § 4). Measurement is pure and self-tested. |
 
 ## Run it
 
@@ -18,12 +19,12 @@ Copy `tests/meta/` into a Godot 4 project (the suites need autoload-free scripts
 godot --headless --path . --run-scene res://tests/meta/test_runner.tscn -- --quiet
 ```
 
-Expected on a project with an `openspec/specs` tree and a fresh `tools/spec_index.sh` run: `[DONE] N/N passed, 6 tests`. Without an `openspec/` tree the spec-index suite fails on purpose (missing index): that failure is the tripwire working.
+Expected on a project with an `openspec/specs` tree, a fresh `tools/spec_index.sh` run and a root `CLAUDE.md` within budget: `[DONE] N/N passed, 9 tests`. Without an `openspec/` tree the spec-index suite fails on purpose (missing index), and without a root `CLAUDE.md` the budget suite does: those failures are the tripwires working.
 
 ## Adapt it
 
 1. Move the suites to your own folder (`scripts/tests/` in the source project) and set `SUITE_DIR` in `test_registration_suite.gd` to it. Update the three paths in `test_runner.tscn`.
-2. If you already have a `TestSuite` / `TestRunner` `class_name`, keep yours and port only the two suites; the only API they need is `check` / `check_eq` / `get_tests`.
+2. If you already have a `TestSuite` / `TestRunner` `class_name`, keep yours and port only the three suites; the only API they need is `check` / `check_eq` / `get_tests`.
 3. Add every new suite to `test_runner.tscn` as the last `ext_resource` and last node, `load_steps` untouched.
 4. Wire `scripts/test.sh` as `tools/test.sh` with `TEST_SCENE` pointing at your runner, and grep its output with `grep -E '^\[(FAIL|DONE)'`.
 5. Write more meta-suites in the same shape when a rule is worth more than a sentence in CLAUDE.md. Shapes that paid off in the source project: a snapshot suite that holds every balance literal in one place (so a retune is a two-file diff), a suite that greps test sources for a real resource preloaded but asserted against a literal, a suite that checks no main spec carries a delta header, a suite that checks a mute flag is written only under `scripts/tests/`.

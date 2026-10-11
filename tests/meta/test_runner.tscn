@@ -1,8 +1,9 @@
-[gd_scene load_steps=4 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://tests/meta/test_runner.gd" id="test_runner"]
 [ext_resource type="Script" path="res://tests/meta/test_registration_suite.gd" id="test_registration_suite"]
 [ext_resource type="Script" path="res://tests/meta/spec_index_suite.gd" id="spec_index_suite"]
+[ext_resource type="Script" path="res://tests/meta/claude_md_budget_suite.gd" id="claude_md_budget_suite"]
 
 [node name="TestRunner" type="Node"]
 script = ExtResource("test_runner")
@@ -12,3 +13,6 @@ script = ExtResource("test_registration_suite")
 
 [node name="SpecIndexSuite" type="Node" parent="."]
 script = ExtResource("spec_index_suite")
+
+[node name="ClaudeMdBudgetSuite" type="Node" parent="."]
+script = ExtResource("claude_md_budget_suite")

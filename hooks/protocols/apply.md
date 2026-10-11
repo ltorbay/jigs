@@ -12,6 +12,7 @@ Failing tests, spec deltas and CLAUDE.md are the project's executable record of 
 - Weakening an assertion (`check_eq` → `check`, dropping a sub-assertion, loosening a boundary).
 - Removing a suite from the test runner's registration (`<TEST_RUNNER_SCENE>`, e.g. `scenes/tests/test_runner.tscn`).
 - Appending to any `SKIP_*` / `EXCLUDE_*` / `ALLOWED_*` / `ALLOWLIST` entry in a meta-suite.
+- Raising a `MAX_*` budget constant in a meta-suite (e.g. `ClaudeMdBudgetSuite`).
 - Editing files under `openspec/changes/<name>/specs/`, or the change's `proposal.md` / `design.md`, mid-apply.
 - Editing root `CLAUDE.md` or any per-folder `CLAUDE.md` mid-apply.
 

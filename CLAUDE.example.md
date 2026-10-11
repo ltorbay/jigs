@@ -1,6 +1,6 @@
 # CLAUDE.md — <project name>
 
-Root instruction file. Budget: 30 KB / 200 lines, soft. When it is exceeded, the next change is a graduation pass (see `PLAYBOOK.md` § "When and how to update CLAUDE.md"), not ad-hoc condensation. Check with `wc -c CLAUDE.md`.
+Root instruction file. Budget: 30 KB / 200 lines, soft. When it is exceeded, the next change is a graduation pass (see `PLAYBOOK.md` § "When and how to update CLAUDE.md"), not ad-hoc condensation. `ClaudeMdBudgetSuite` (tests/meta) fails the build when it is exceeded.
 
 ## Stance
 
