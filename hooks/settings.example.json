@@ -1,0 +1,37 @@
+{
+  "_comment": "Merge into your project's .claude/settings.json. Hooks live in .claude/hooks/, protocols in .claude/protocols/. The permissions block lets the agent run the OpenSpec read-only commands and the test wrapper without a prompt.",
+  "permissions": {
+    "allow": [
+      "Bash(openspec status:*)",
+      "Bash(openspec instructions:*)",
+      "Bash(openspec validate:*)",
+      "Bash(openspec list:*)",
+      "Bash(tools/test.sh:*)",
+      "Bash(./tools/test.sh:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/archive_spec_check.py\""
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/protocol_inject.py\""
+          }
+        ]
+      }
+    ]
+  }
+}

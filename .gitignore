@@ -1,0 +1,17 @@
+# Godot
+.godot/
+*.import
+*.uid
+
+# Hook observability log (append-only, per machine)
+.claude/hooks/protocol_inject.log
+hooks/protocol_inject.log
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/worktrees/
+
+# OS / editor
+.DS_Store
+.idea/
+__pycache__/

@@ -1,0 +1,41 @@
+# openspec/config.yaml — example
+#
+# OpenSpec (https://github.com/Fission-AI/OpenSpec) reads this file when the
+# agent creates change artifacts (proposal, design, tasks, spec deltas). The
+# `rules.tasks` block below is the task-authoring half of the Drift Protocol:
+# the apply-time half (hooks/protocols/apply.md) blocks edits to pre-existing
+# tests, snapshot data and CLAUDE.md unless they were pre-enumerated HERE, in
+# tasks.md, when the change was planned.
+#
+# Why this split works: the moment to decide "this test will legitimately
+# change" is planning, with the proposal open, not mid-implementation with a
+# red suite and a model looking for the shortest path to green. An edit that
+# was named in advance is a plan; the same edit improvised at apply time is
+# drift until proven otherwise with a verbatim quote.
+#
+# This file survives `openspec update` (which regenerates the generated
+# commands/skills only), so it is a safe home for project rules.
+
+schema: spec-driven
+
+# Optional: shown to the agent when creating artifacts.
+# context: |
+#   Godot 4 game, GDScript. Tests: tools/test.sh (single headless boot).
+#   Balance literals live in one snapshot suite, never in rule tests.
+
+rules:
+  tasks:
+    # 1. Pre-existing tests the change will legitimately touch.
+    - "Pre-enumerate intended test edits: when the change modifies behaviour covered by existing tests, name each affected test by file and method (e.g. '4.9 Update test_active_item_unchanged_after_cast in scripts/tests/cast_suite.gd for the new gesture flow'). Tests so listed are pre-authorised at apply time; tests NOT listed are blocked by the Drift Protocol bypass rule (.claude/protocols/apply.md, injected by the apply hook) and need a quoted-phrase justification."
+
+    # 2. Data retunes that a snapshot suite tripwires.
+    - "If the change retunes data that a snapshot suite pins (balance resources, golden seeds, pixel-size allowlists), list the affected data files and the snapshot dictionaries to update, so the snapshot edit is a pre-authorised two-file diff at apply time."
+
+    # 3. Documentation the change will falsify.
+    - "If the change adds a system, alters a documented invariant, or falsifies a claim in root CLAUDE.md or any per-folder CLAUDE.md, include a final task naming the exact CLAUDE.md file(s) and section(s) to update. CLAUDE.md edits are Drift-Protocol-gated mid-apply; naming them here pre-authorises the edit. Before adding a line to root CLAUDE.md, walk the graduation ladder (test tripwire, per-folder CLAUDE.md, local comment, root) and prefer the lowest rung that holds."
+
+  # Optional examples for other artifacts:
+  # proposal:
+  #   - "Keep proposals under 500 words; always include a Non-goals section."
+  # design:
+  #   - "Every claim in Context names the file:line it was read from, so a reviewer can tell a stale claim from a wrong one."
