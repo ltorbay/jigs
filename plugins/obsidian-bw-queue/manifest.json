@@ -1,0 +1,9 @@
+{
+  "id": "bw-queue",
+  "name": "bw-queue",
+  "version": "0.1.0",
+  "minAppVersion": "1.8.7",
+  "description": "Pushes the Bonewake TODO note to the queue repo and paints triage status back onto its lines.",
+  "author": "ltorbay",
+  "isDesktopOnly": false
+}

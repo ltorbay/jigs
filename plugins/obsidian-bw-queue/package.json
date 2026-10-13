@@ -1,0 +1,19 @@
+{
+  "name": "obsidian-bw-queue",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Obsidian plugin bridging the Bonewake TODO note and the bonewake-queue repo.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "test": "node esbuild.config.mjs test && node --test \"test/*.test.mjs\""
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "obsidian": "1.14.4",
+    "typescript": "~5.9.0"
+  }
+}
