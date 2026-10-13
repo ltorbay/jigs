@@ -23,11 +23,124 @@ __export(main_exports, {
   default: () => BwQueuePlugin
 });
 module.exports = __toCommonJS(main_exports);
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
+
+// src/editor.ts
+var import_state = require("@codemirror/state");
+var import_view = require("@codemirror/view");
+var import_obsidian = require("obsidian");
+
+// src/hidden-id.ts
+var TRAILING_ID = / \^(bw-[a-z]?\d{4,})\s*$/;
+function findHiddenId(line) {
+  const match = TRAILING_ID.exec(line);
+  if (!match) return null;
+  return { from: match.index, to: line.length, id: match[1] };
+}
+function findHiddenIdRange(line) {
+  const hidden = findHiddenId(line);
+  return hidden ? [hidden.from, hidden.to] : null;
+}
+function clampCursor(line, oldHead, newHead, hasNextLine) {
+  const range = findHiddenIdRange(line);
+  if (!range || newHead <= range[0]) return newHead;
+  const steppedForward = oldHead === range[0] && newHead === range[1];
+  if (steppedForward && hasNextLine) return range[1] + 1;
+  return range[0];
+}
+
+// src/editor.ts
+var bypassClamp = import_state.Annotation.define();
+var HiddenIdWidget = class extends import_view.WidgetType {
+  constructor(id) {
+    super();
+    this.id = id;
+  }
+  eq(other) {
+    return other.id === this.id;
+  }
+  toDOM() {
+    const dot = document.createElement("span");
+    const label = `${this.id} (pipeline id)`;
+    dot.className = "bw-queue-id";
+    dot.title = label;
+    dot.setAttribute("aria-label", label);
+    dot.addEventListener("click", () => new import_obsidian.Notice(label));
+    return dot;
+  }
+};
+function buildDecorations(view) {
+  const builder = new import_state.RangeSetBuilder();
+  const doc = view.state.doc;
+  for (const { from, to } of view.visibleRanges) {
+    let pos = from;
+    while (pos <= to) {
+      const line = doc.lineAt(pos);
+      const hidden = findHiddenId(line.text);
+      if (hidden) {
+        builder.add(
+          line.from + hidden.from,
+          line.from + hidden.to,
+          import_view.Decoration.replace({ widget: new HiddenIdWidget(hidden.id) })
+        );
+      }
+      pos = line.to + 1;
+    }
+  }
+  return builder.finish();
+}
+var hiddenIdPlugin = import_view.ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = buildDecorations(view);
+    }
+    update(update) {
+      if (update.docChanged || update.viewportChanged) this.decorations = buildDecorations(update.view);
+    }
+  },
+  {
+    decorations: (plugin) => plugin.decorations,
+    provide: (plugin) => import_view.EditorView.atomicRanges.of((view) => view.plugin(plugin)?.decorations ?? import_view.Decoration.none)
+  }
+);
+function clampSelection(tr) {
+  if (!tr.selection || tr.annotation(bypassClamp)) return tr;
+  const doc = tr.newDoc;
+  const oldRanges = tr.startState.selection.ranges;
+  let changed = false;
+  const ranges = tr.selection.ranges.map((range, index) => {
+    if (!range.empty) return range;
+    const line = doc.lineAt(range.head);
+    const old = oldRanges[index];
+    const oldHead = old && old.empty ? tr.changes.mapPos(old.head) - line.from : null;
+    const head = line.from + clampCursor(line.text, oldHead, range.head - line.from, line.number < doc.lines);
+    if (head === range.head) return range;
+    changed = true;
+    return import_state.EditorSelection.cursor(head);
+  });
+  if (!changed) return tr;
+  return [tr, { selection: import_state.EditorSelection.create(ranges, tr.selection.mainIndex), sequential: true }];
+}
+function enterAfterHiddenId(view) {
+  const { state } = view;
+  if (state.selection.ranges.length !== 1 || !state.selection.main.empty) return false;
+  const line = state.doc.lineAt(state.selection.main.head);
+  const hidden = findHiddenId(line.text);
+  if (!hidden || state.selection.main.head !== line.from + hidden.from) return false;
+  view.dispatch({ selection: import_state.EditorSelection.cursor(line.to), annotations: bypassClamp.of(true) });
+  return false;
+}
+function hiddenIdExtension() {
+  return [
+    hiddenIdPlugin,
+    import_state.EditorState.transactionFilter.of(clampSelection),
+    import_state.Prec.highest(import_view.keymap.of([{ key: "Enter", run: enterAfterHiddenId }]))
+  ];
+}
 
 // src/ids.ts
 var OPEN_TASK = /^\s*- \[ \] /;
-var TRAILING_ID = /\s\^bw-[a-z]?\d{4,}\s*$/;
+var TRAILING_ID2 = /\s\^bw-[a-z]?\d{4,}\s*$/;
 var DEVICE_ID = /\^bw-([a-z])(\d{4,})/g;
 var DEVICE_LETTER = /^[a-z]$/;
 function isDeviceLetter(value) {
@@ -50,7 +163,7 @@ function nextId(text, letter, issuedFloor = 0) {
   return Math.max(highestId(text, letter), issuedFloor) + 1;
 }
 function needsId(line) {
-  return OPEN_TASK.test(line) && !TRAILING_ID.test(line);
+  return OPEN_TASK.test(line) && !TRAILING_ID2.test(line);
 }
 function splitCarriageReturn(line) {
   return line.endsWith("\r") ? [line.slice(0, -1), "\r"] : [line, ""];
@@ -66,7 +179,7 @@ function assignIds(text, letter, issuedFloor = 0) {
 }
 
 // src/github.ts
-var import_obsidian = require("obsidian");
+var import_obsidian2 = require("obsidian");
 
 // src/encoding.ts
 function utf8ToBase64(text) {
@@ -117,7 +230,7 @@ function describe(response) {
 }
 async function getFile(target, path) {
   const url = `${contentsUrl(target, path)}?ref=${encodeURIComponent(target.branch)}`;
-  const response = await (0, import_obsidian.requestUrl)({ url, method: "GET", headers: headers(target), throw: false });
+  const response = await (0, import_obsidian2.requestUrl)({ url, method: "GET", headers: headers(target), throw: false });
   if (response.status === 404) return null;
   if (response.status !== 200) throw new GitHubError(`GET ${path}: ${describe(response)}`, response.status);
   const body = response.json;
@@ -133,7 +246,7 @@ async function putOnce(target, path, content, sha) {
     branch: target.branch
   };
   if (sha) payload.sha = sha;
-  return (0, import_obsidian.requestUrl)({
+  return (0, import_obsidian2.requestUrl)({
     url: contentsUrl(target, path),
     method: "PUT",
     headers: { ...headers(target), "Content-Type": "application/json" },
@@ -157,7 +270,7 @@ async function putFile(target, path, content) {
 }
 
 // src/settings.ts
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 var DEFAULT_SETTINGS = {
   token: "",
   repo: "ltorbay/bonewake-queue",
@@ -166,7 +279,7 @@ var DEFAULT_SETTINGS = {
   debounceSeconds: 20,
   paintOnOpen: true
 };
-var BwQueueSettingTab = class extends import_obsidian2.PluginSettingTab {
+var BwQueueSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -175,8 +288,8 @@ var BwQueueSettingTab = class extends import_obsidian2.PluginSettingTab {
     const { containerEl } = this;
     const settings = this.plugin.settings;
     containerEl.empty();
-    new import_obsidian2.Setting(containerEl).setName("Device letter").setDesc("Letter in the ids this device issues (^bw-<letter>NNNN). Stored on this device only, never synced.").addText((text) => text.setValue(this.plugin.deviceLetter).setDisabled(true));
-    new import_obsidian2.Setting(containerEl).setName("GitHub token").setDesc("Fine-grained PAT with Contents read and write on the queue repo only.").addText((text) => {
+    new import_obsidian3.Setting(containerEl).setName("Device letter").setDesc("Letter in the ids this device issues (^bw-<letter>NNNN). Stored on this device only, never synced.").addText((text) => text.setValue(this.plugin.deviceLetter).setDisabled(true));
+    new import_obsidian3.Setting(containerEl).setName("GitHub token").setDesc("Fine-grained PAT with Contents read and write on the queue repo only.").addText((text) => {
       text.inputEl.type = "password";
       text.setValue(settings.token).onChange(async (value) => {
         settings.token = value.trim();
@@ -186,7 +299,7 @@ var BwQueueSettingTab = class extends import_obsidian2.PluginSettingTab {
     this.addText("Repository", "owner/name", "repo");
     this.addText("Branch", "Branch the queue files live on.", "branch");
     this.addText("TODO note", "Vault path of the TODO note.", "todoPath");
-    new import_obsidian2.Setting(containerEl).setName("Debounce (seconds)").setDesc("Quiet time after the last edit before pushing.").addText(
+    new import_obsidian3.Setting(containerEl).setName("Debounce (seconds)").setDesc("Quiet time after the last edit before pushing.").addText(
       (text) => text.setValue(String(settings.debounceSeconds)).onChange(async (value) => {
         const seconds = Number(value);
         if (!Number.isFinite(seconds) || seconds < 1) return;
@@ -194,7 +307,7 @@ var BwQueueSettingTab = class extends import_obsidian2.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("Paint status on open").setDesc("Fetch queue/status.json when the vault opens and paint glyphs onto tasks.").addToggle(
+    new import_obsidian3.Setting(containerEl).setName("Paint status on open").setDesc("Fetch queue/status.json when the vault opens and paint glyphs onto tasks.").addToggle(
       (toggle) => toggle.setValue(settings.paintOnOpen).onChange(async (value) => {
         settings.paintOnOpen = value;
         await this.plugin.saveSettings();
@@ -203,7 +316,7 @@ var BwQueueSettingTab = class extends import_obsidian2.PluginSettingTab {
   }
   addText(name, desc, key) {
     const settings = this.plugin.settings;
-    new import_obsidian2.Setting(this.containerEl).setName(name).setDesc(desc).addText(
+    new import_obsidian3.Setting(this.containerEl).setName(name).setDesc(desc).addText(
       (text) => text.setValue(settings[key]).onChange(async (value) => {
         settings[key] = value.trim() || DEFAULT_SETTINGS[key];
         await this.plugin.saveSettings();
@@ -226,8 +339,8 @@ var GLYPHS = {
   done: "\u2705",
   stale: "\u2705"
 };
-var GLYPH_FRAGMENT = /(?:\s+(?:⏳|🔎|⚖️?|👤|✅)\s+#\d+)+$/u;
-var TRAILING_ID2 = /^(.*?)\s+\^(bw-[a-z]?\d{4,})\s*$/;
+var GLYPH_FRAGMENT = /(?:\s+(?:⏳|🔎|⚖️?|👤|✅)(?:\s+#\d+)?)+$/u;
+var TRAILING_ID3 = /^(.*?)\s+\^(bw-[a-z]?\d{4,})\s*$/;
 function glyphFor(state) {
   return Object.prototype.hasOwnProperty.call(GLYPHS, state) ? GLYPHS[state] : void 0;
 }
@@ -256,13 +369,15 @@ function toEntry(value) {
 function repaintLine(line, status) {
   const cr = line.endsWith("\r") ? "\r" : "";
   const body = cr ? line.slice(0, -1) : line;
-  const match = TRAILING_ID2.exec(body);
+  const match = TRAILING_ID3.exec(body);
   if (!match) return line;
   const [, prefix, id] = match;
   const entry = status[id];
   if (!entry) return line;
-  const text = prefix.replace(GLYPH_FRAGMENT, "");
-  return `${text} ${GLYPHS[entry.state]} #${entry.issue} ^${id}${cr}`;
+  const stripped = prefix.replace(GLYPH_FRAGMENT, "");
+  const text = entry.state === "done" ? stripped.replace(/^(\s*- )\[ \]/, "$1[x]") : stripped;
+  const ref = entry.issue > 0 ? ` #${entry.issue}` : "";
+  return `${text} ${GLYPHS[entry.state]}${ref} ^${id}${cr}`;
 }
 function repaint(text, status) {
   return text.split("\n").map((line) => repaintLine(line, status)).join("\n");
@@ -272,7 +387,7 @@ function repaint(text, status) {
 var REMOTE_TODO = "queue/TODO.md";
 var REMOTE_STATUS = "queue/status.json";
 var DEVICE_KEY = "bw-queue-device";
-var BwQueuePlugin = class extends import_obsidian3.Plugin {
+var BwQueuePlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
     this.settings = { ...DEFAULT_SETTINGS };
@@ -289,6 +404,8 @@ var BwQueuePlugin = class extends import_obsidian3.Plugin {
     this.deviceLetter = this.loadDeviceLetter();
     this.addSettingTab(new BwQueueSettingTab(this.app, this));
     this.statusEl = this.addStatusBarItem();
+    this.injectIdStyle();
+    this.registerEditorExtension(hiddenIdExtension());
     this.setStatus("bw-queue: idle");
     this.addCommand({ id: "push-now", name: "push now", callback: () => this.enqueue(() => this.sync()) });
     this.addCommand({ id: "refresh-status", name: "refresh status", callback: () => this.enqueue(() => this.refreshStatus()) });
@@ -296,6 +413,12 @@ var BwQueuePlugin = class extends import_obsidian3.Plugin {
     this.app.workspace.onLayoutReady(() => {
       if (this.settings.paintOnOpen) this.enqueue(() => this.refreshStatus());
     });
+  }
+  injectIdStyle() {
+    const style = document.createElement("style");
+    style.textContent = ".bw-queue-id { display: inline-block; width: 6px; height: 6px; margin-left: 4px; border-radius: 50%; background: var(--text-faint); vertical-align: middle; cursor: help; }";
+    document.head.appendChild(style);
+    this.register(() => style.remove());
   }
   onunload() {
     this.clearDebounce();
@@ -344,11 +467,11 @@ var BwQueuePlugin = class extends import_obsidian3.Plugin {
     this.debounceHandle = null;
   }
   isTodo(file) {
-    return file instanceof import_obsidian3.TFile && file.path === (0, import_obsidian3.normalizePath)(this.settings.todoPath);
+    return file instanceof import_obsidian4.TFile && file.path === (0, import_obsidian4.normalizePath)(this.settings.todoPath);
   }
   todoFile() {
-    const file = this.app.vault.getAbstractFileByPath((0, import_obsidian3.normalizePath)(this.settings.todoPath));
-    return file instanceof import_obsidian3.TFile ? file : null;
+    const file = this.app.vault.getAbstractFileByPath((0, import_obsidian4.normalizePath)(this.settings.todoPath));
+    return file instanceof import_obsidian4.TFile ? file : null;
   }
   enqueue(task) {
     this.queue = this.queue.then(task).catch((error) => this.report(error));
@@ -365,7 +488,7 @@ var BwQueuePlugin = class extends import_obsidian3.Plugin {
     if (!this.settings.token) {
       if (!this.missingTokenNoticed) {
         this.missingTokenNoticed = true;
-        new import_obsidian3.Notice("bw-queue: no GitHub token set, network actions disabled.");
+        new import_obsidian4.Notice("bw-queue: no GitHub token set, network actions disabled.");
         console.warn("bw-queue: no GitHub token set");
       }
       this.setStatus("bw-queue: no token");
@@ -376,7 +499,7 @@ var BwQueuePlugin = class extends import_obsidian3.Plugin {
   requireTodo() {
     const file = this.todoFile();
     if (!file) {
-      new import_obsidian3.Notice(`bw-queue: ${this.settings.todoPath} not found.`);
+      new import_obsidian4.Notice(`bw-queue: ${this.settings.todoPath} not found.`);
       this.setStatus("bw-queue: TODO note missing");
     }
     return file;
@@ -391,7 +514,6 @@ var BwQueuePlugin = class extends import_obsidian3.Plugin {
     await this.push(content);
   }
   async push(content) {
-    if (content === this.lastPushedContent) return;
     const target = this.target();
     if (!target) return;
     await putFile(target, REMOTE_TODO, content);
@@ -418,7 +540,7 @@ var BwQueuePlugin = class extends import_obsidian3.Plugin {
   report(error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn("bw-queue:", error);
-    new import_obsidian3.Notice(`bw-queue: ${message}`);
+    new import_obsidian4.Notice(`bw-queue: ${message}`);
     this.setStatus(`bw-queue: error ${clock()}: ${message.slice(0, 60)}`);
   }
   setStatus(text) {

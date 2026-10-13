@@ -32,7 +32,7 @@ test("repaintLine appends glyph and issue before the id", () => {
 test("repaintLine replaces a previous glyph fragment", () => {
   assert.equal(repaintLine("- [ ] rework AI ⏳ #13 ^bw-m0002", status), "- [ ] rework AI 🔎 #13 ^bw-m0002");
   assert.equal(repaintLine("- [ ] nerf ⚖️ #15 ^bw-m0004", status), "- [ ] nerf ⚖ #15 ^bw-m0004");
-  assert.equal(repaintLine("- [ ] x 🔎 #9 ✅ #9 ^bw-m0003", status), "- [ ] x ✅ #14 ^bw-m0003");
+  assert.equal(repaintLine("- [ ] x 🔎 #9 ✅ #9 ^bw-m0003", status), "- [x] x ✅ #14 ^bw-m0003");
 });
 
 test("repaint is idempotent", () => {
@@ -64,4 +64,13 @@ test("repaint matches ids from every device letter", () => {
 
 test("repaint does not touch an issue reference that is part of the text", () => {
   assert.equal(repaintLine("- [ ] see #4 for context ^bw-m0001", status), "- [ ] see #4 for context ⏳ #12 ^bw-m0001");
+});
+
+test("done ticks the checkbox, stale and others do not", () => {
+  const status = { "bw-m0001": { issue: 7, state: "done" }, "bw-m0002": { issue: 8, state: "stale" } };
+  assert.equal(repaintLine("- [ ] fix label ^bw-m0001", status), "- [x] fix label ✅ #7 ^bw-m0001");
+  assert.equal(repaintLine("\t- [ ] nested ^bw-m0001", status), "\t- [x] nested ✅ #7 ^bw-m0001");
+  assert.equal(repaintLine("- [ ] maybe done ^bw-m0002", status), "- [ ] maybe done ✅ #8 ^bw-m0002");
+  const once = repaintLine("- [ ] fix label ^bw-m0001", status);
+  assert.equal(repaintLine(once, status), once);
 });

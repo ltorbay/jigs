@@ -33,7 +33,7 @@ const GLYPHS: Record<QueueState, string> = {
   stale: "✅",
 };
 
-const GLYPH_FRAGMENT = /(?:\s+(?:⏳|🔎|⚖️?|👤|✅)\s+#\d+)+$/u;
+const GLYPH_FRAGMENT = /(?:\s+(?:⏳|🔎|⚖️?|👤|✅)(?:\s+#\d+)?)+$/u;
 const TRAILING_ID = /^(.*?)\s+\^(bw-[a-z]?\d{4,})\s*$/;
 
 export function glyphFor(state: string): string | undefined {
@@ -75,8 +75,10 @@ export function repaintLine(line: string, status: StatusMap): string {
   const [, prefix, id] = match;
   const entry = status[id];
   if (!entry) return line;
-  const text = prefix.replace(GLYPH_FRAGMENT, "");
-  return `${text} ${GLYPHS[entry.state]} #${entry.issue} ^${id}${cr}`;
+  const stripped = prefix.replace(GLYPH_FRAGMENT, "");
+  const text = entry.state === "done" ? stripped.replace(/^(\s*- )\[ \]/, "$1[x]") : stripped;
+  const ref = entry.issue > 0 ? ` #${entry.issue}` : "";
+  return `${text} ${GLYPHS[entry.state]}${ref} ^${id}${cr}`;
 }
 
 export function repaint(text: string, status: StatusMap): string {

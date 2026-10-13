@@ -1,4 +1,5 @@
 import { Notice, Plugin, TAbstractFile, TFile, normalizePath } from "obsidian";
+import { hiddenIdExtension } from "./editor";
 import { assignIds, highestId, isDeviceLetter, randomDeviceLetter } from "./ids";
 import { getFile, putFile, RepoTarget } from "./github";
 import { BwQueueSettings, BwQueueSettingTab, DEFAULT_SETTINGS } from "./settings";
@@ -28,6 +29,8 @@ export default class BwQueuePlugin extends Plugin {
     this.deviceLetter = this.loadDeviceLetter();
     this.addSettingTab(new BwQueueSettingTab(this.app, this));
     this.statusEl = this.addStatusBarItem();
+    this.injectIdStyle();
+    this.registerEditorExtension(hiddenIdExtension());
     this.setStatus("bw-queue: idle");
 
     this.addCommand({ id: "push-now", name: "push now", callback: () => this.enqueue(() => this.sync()) });
@@ -37,6 +40,14 @@ export default class BwQueuePlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       if (this.settings.paintOnOpen) this.enqueue(() => this.refreshStatus());
     });
+  }
+
+  private injectIdStyle(): void {
+    const style = document.createElement("style");
+    style.textContent =
+      ".bw-queue-id { display: inline-block; width: 6px; height: 6px; margin-left: 4px; border-radius: 50%; background: var(--text-faint); vertical-align: middle; cursor: help; }";
+    document.head.appendChild(style);
+    this.register(() => style.remove());
   }
 
   onunload(): void {
@@ -150,7 +161,6 @@ export default class BwQueuePlugin extends Plugin {
   }
 
   private async push(content: string): Promise<void> {
-    if (content === this.lastPushedContent) return;
     const target = this.target();
     if (!target) return;
     await putFile(target, REMOTE_TODO, content);
