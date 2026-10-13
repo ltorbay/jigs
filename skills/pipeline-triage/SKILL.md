@@ -67,6 +67,10 @@ Unsure means `ask`, never a guess. Lines may be French or English; classify the 
 
 ## Sequence
 
+### 0. One run at a time
+
+Call `mcp__Claude_Code_Remote__list_sessions` and look for another session titled `bw-pipeline triage` (the routine's runs) that is in a working status and was created before this one. If there is one, end at once with the line `Another triage run is in progress; exiting.` and change nothing: two overlapping runs both open issues for the same new ids (2026-10-13: twenty duplicate pairs).
+
 ### 1. Read the queue
 
 1. `git -C QUEUE pull --ff-only origin main` and `git -C GAME fetch origin main && git -C GAME checkout --detach origin/main`.
