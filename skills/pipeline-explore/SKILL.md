@@ -1,6 +1,6 @@
 ---
 name: pipeline-explore
-description: Explore worker session of the Bonewake TODO pipeline (Fable, or Opus when Fable is spent), parameterized by a GitHub issue number on ltorbay/bonewake and an effort (medium for shallow, high for deep). Investigates the code until every claim is a file:line, posts findings and at most three questions with recommended answers on the issue, notifies the phone, then turns the user's answers into an OpenSpec proposal pushed on agent/bw-NNNN-proposal. Stops before apply. Use when a session prompt says to follow pipeline-explore for an issue.
+description: Explore worker session of the Bonewake TODO pipeline (Fable, or Opus when Fable is spent), parameterized by a GitHub issue number on ltorbay/bonewake and an effort (medium for shallow, high for deep). Investigates the code until every claim is a file:line, posts findings and at most three questions with recommended answers on the issue, notifies the phone, then turns the user's answers into an OpenSpec proposal pushed on agent/bw-NNNN-proposal. Hands the approved proposal to a separate apply session. Use when a session prompt says to follow pipeline-explore for an issue.
 metadata:
   version: "1.0"
 ---
@@ -11,6 +11,7 @@ You are an explore worker in the Bonewake TODO pipeline. Input: issue `#N` on `l
 
 - The clone of `ltorbay/bonewake` (locate it with `ls /home/user`; expected `/home/user/bonewake`), called GAME below. It is the only repository in this session: you do not have the queue repo or the jigs repo. Everything about the item (bw id, section, class, the full line, triage's interpretation) is in the issue body; `queue/status.json` belongs to triage and you never touch it. This file is GAME `.claude/skills/pipeline-explore/SKILL.md`; re-read it if your context lost it.
 - OpenSpec is installed in GAME (`openspec` CLI, `/opsx:propose` command in `.claude/commands/opsx/`).
+- `openspec` (1.3.1) is installed by the environment setup. If `command -v openspec` finds nothing, run it as `npx -y @fission-ai/openspec@1.3.1 <args>` for the whole session; never skip a validate or archive step because the binary is missing.
 - Tools: `mcp__github__*` (issue read, comment, labels), `PushNotification`. Load deferred schemas with `ToolSearch` (`select:PushNotification`, `+github issue`) before first use.
 - `PushNotification(message, status: "proactive")` reaches the user's phone. A reply from the phone re-wakes this same session. After every notification, end your turn and continue from the reply. Every push obeys Quiet hours.
 - Every comment you write on the issue starts with the line `<!-- bw-pipeline -->`.
@@ -30,11 +31,11 @@ The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and
 - Never edit game code, `.tres`, tests or any `CLAUDE.md`. The only files you create are under `openspec/changes/<name>/`.
 - Never commit to `main` or push it. The proposal lives on `agent/bw-NNNN-proposal` only. Never open a PR unless the user asks for one.
 - At most three questions, each with your recommended answer and the reason. A question whose answer you can find in the code is not a question.
-- Do not apply. The user decides on apply (locally, or as a `parallel-apply` cloud run). This skill ends at the proposal.
+- Do not apply. On the user's approval this skill labels the issue `approved` and fires triage, which spawns pipeline-apply in a fresh Opus session. This skill ends at the hand-off.
 
 ## Sequence
 
-1. **Read the issue** `#N` with all comments. Comments without the marker are the user's and override the body; the pipeline's interpretation comment is a starting guess, not a fact.
+1. **Read the issue** `#N` with all comments. If it carries `line-edited`, the latest marked `Line edited` comment holds the current TODO text and wins over the body; remove the label once read. Comments without the marker are the user's and override the body; the pipeline's interpretation comment is a starting guess, not a fact.
 2. **Read the rules.** GAME root `CLAUDE.md`, then the `CLAUDE.md` of every subsystem the issue touches: `scripts/systems/*/CLAUDE.md` (spell, ai, combat, run, terrain_visual, and any other present), plus `scripts/tests/CLAUDE.md` when tests are in scope. Also read `docs/STORY.md` when the item is narrative-adjacent.
 3. **Investigate.** Grep and read until you can answer, each with `file:line`:
    - what exists today that the item builds on or replaces;
@@ -63,10 +64,11 @@ The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and
 2. **Propose.** In GAME: `git fetch origin main`, `git switch -c agent/bw-NNNN-proposal origin/main`. Run `/opsx:propose <kebab-name>` with a description that folds in the issue line, the smallest version and every decision. Honour `openspec/config.yaml` `rules`: pre-enumerate every pre-existing test edit by file and method, list `.tres` files and `BalanceSnapshotSuite` dicts for any retune, add a final task naming each `CLAUDE.md` file and section to update; a `## MODIFIED Requirements` entry carries every existing scenario of that requirement verbatim. Every `file:line` and number in the proposal comes from a read in this session.
 3. `openspec validate <kebab-name> --strict` until it passes.
 4. **Commit and push** only `openspec/changes/<kebab-name>/` (explicit paths): message `docs(openspec): propose <kebab-name>` with body `Refs #N (bw-NNNN)` and the trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (`Claude Opus 5.5` when this session runs on Opus). Set a local git identity first if none is configured. `git push -u origin agent/bw-NNNN-proposal`.
-5. **Comment** a marked proposal summary on `#N`: change name, branch, the decisions taken, the task count and the files the tasks touch, and how to apply (`/opsx:apply <kebab-name>` locally after checking out the branch, or a `parallel-apply` cloud run).
+5. **Comment** a marked proposal summary on `#N`: change name, branch, the decisions taken, the task count and the files the tasks touch. End it with: `Reply "apply" in the Claude session to hand this to a fresh Opus apply session.`
 6. **Label** the issue `proposed`; remove `in-progress`.
-7. **Notify.** `PushNotification` with message `Proposal ready: <kebab-name> (bw-NNNN #N)` and status `proactive`. End the turn.
-8. Further replies are proposal review: amend the change files, re-validate, `git commit --amend`, `git push --force-with-lease origin agent/bw-NNNN-proposal`, comment what changed, notify, end the turn. A request to implement is answered with the apply options from step 5; this skill does not apply.
+7. **Recap and notify.** Final message of the turn: change name, the decisions, task count, files touched, and `Reply "apply" to start the implementation, or tell me what to change in the proposal.` Then `PushNotification` with message `Proposal ready: <kebab-name> (bw-NNNN #N)` and status `proactive`. End the turn.
+8. Further replies are proposal review: amend the change files, re-validate, `git commit --amend`, `git push --force-with-lease origin agent/bw-NNNN-proposal`, comment what changed, notify, end the turn.
+9. **Approval hand-off.** "apply", "go", "lgtm", "implement it" approve the proposal as it stands on the branch. Then, and only then: swap label `proposed` for `approved` on `#N`, post a marked comment `Approved by the user; handing off to a fresh apply session.`, and call `fire_trigger` (use whichever of `mcp__Claude_Code_Remote__fire_trigger` / `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__fire_trigger` is available) with trigger id `trig_01MxRfo1NjHNy2s8TfiMkFfv`, the triage routine, so the apply session starts within minutes instead of at the next hourly run. If the call fails, say so: the next hourly run picks it up anyway. Your last message: `Handed off. The apply session will notify you with the PR.` End the turn. You never implement: a clean Opus context does, by design.
 
 ## Fable limit
 
