@@ -31,7 +31,7 @@ The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and
 - Never edit game code, `.tres`, tests or any `CLAUDE.md`. The only files you create are under `openspec/changes/<name>/`.
 - Never commit to `main` or push it. The proposal lives on `agent/bw-NNNN-proposal` only. Never open a PR unless the user asks for one.
 - At most three questions, each with your recommended answer and the reason. A question whose answer you can find in the code is not a question.
-- Do not apply. On the user's approval this skill labels the issue `approved` and fires triage, which spawns pipeline-apply in a fresh Opus session. This skill ends at the hand-off.
+- Do not apply. On the user's approval this skill labels the issue `approved`; the next triage run spawns pipeline-apply in a fresh Opus session. This skill ends at the hand-off.
 
 ## Sequence
 
@@ -68,7 +68,7 @@ The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and
 6. **Label** the issue `proposed`; remove `in-progress`.
 7. **Recap and notify.** Final message of the turn: change name, the decisions, task count, files touched, and `Reply "apply" to start the implementation, or tell me what to change in the proposal.` Then `PushNotification` with message `Proposal ready: <kebab-name> (bw-NNNN #N)` and status `proactive`. End the turn.
 8. Further replies are proposal review: amend the change files, re-validate, `git commit --amend`, `git push --force-with-lease origin agent/bw-NNNN-proposal`, comment what changed, notify, end the turn.
-9. **Approval hand-off.** "apply", "go", "lgtm", "implement it" approve the proposal as it stands on the branch. Then, and only then: swap label `proposed` for `approved` on `#N`, post a marked comment `Approved by the user; handing off to a fresh apply session.`, and call `fire_trigger` (use whichever of `mcp__Claude_Code_Remote__fire_trigger` / `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__fire_trigger` is available) with trigger id `trig_01MxRfo1NjHNy2s8TfiMkFfv`, the triage routine, so the apply session starts within minutes instead of at the next hourly run. If the call fails, say so: the next hourly run picks it up anyway. Your last message: `Handed off. The apply session will notify you with the PR.` End the turn. You never implement: a clean Opus context does, by design.
+9. **Approval hand-off.** "apply", "go", "lgtm", "implement it" approve the proposal as it stands on the branch. Then, and only then: swap label `proposed` for `approved` on `#N` and post a marked comment `Approved by the user; handing off to a fresh apply session.` Do not call any trigger or session tool: the hourly triage run (minute 23) sees `approved` and spawns the apply session. Your last message: `Handed off. The apply session starts at the next hourly triage (minute 23) and will notify you with the PR.` End the turn. You never implement: a clean Opus context does, by design.
 
 ## Fable limit
 
