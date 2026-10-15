@@ -277,7 +277,8 @@ var DEFAULT_SETTINGS = {
   branch: "main",
   todoPath: "1. Projects/Bonewake/TODO.md",
   debounceSeconds: 20,
-  paintOnOpen: true
+  paintOnOpen: true,
+  statusPollMinutes: 10
 };
 var BwQueueSettingTab = class extends import_obsidian3.PluginSettingTab {
   constructor(app, plugin) {
@@ -311,6 +312,15 @@ var BwQueueSettingTab = class extends import_obsidian3.PluginSettingTab {
       (toggle) => toggle.setValue(settings.paintOnOpen).onChange(async (value) => {
         settings.paintOnOpen = value;
         await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian3.Setting(containerEl).setName("Status refresh (minutes)").setDesc("Repaint from queue/status.json on this interval and when the app returns to the foreground. 0 turns both off; a push always repaints.").addText(
+      (text) => text.setValue(String(settings.statusPollMinutes)).onChange(async (value) => {
+        const minutes = Number(value);
+        if (!Number.isFinite(minutes) || minutes < 0) return;
+        settings.statusPollMinutes = minutes;
+        await this.plugin.saveSettings();
+        this.plugin.restartStatusPoll();
       })
     );
   }
@@ -394,6 +404,7 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
     this.lastPushedContent = null;
     this.deviceLetter = "";
     this.debounceHandle = null;
+    this.pollHandle = null;
     this.selfWrites = 0;
     this.missingTokenNoticed = false;
     this.queue = Promise.resolve();
@@ -413,6 +424,20 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
     this.app.workspace.onLayoutReady(() => {
       if (this.settings.paintOnOpen) this.enqueue(() => this.refreshStatus());
     });
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "visible" && this.settings.statusPollMinutes > 0) this.backgroundRefresh();
+    });
+    this.restartStatusPoll();
+  }
+  restartStatusPoll() {
+    if (this.pollHandle !== null) window.clearInterval(this.pollHandle);
+    this.pollHandle = null;
+    const minutes = this.settings.statusPollMinutes;
+    if (minutes > 0) this.pollHandle = window.setInterval(() => this.backgroundRefresh(), minutes * 6e4);
+  }
+  backgroundRefresh() {
+    if (this.debounceHandle !== null || !this.settings.token) return;
+    this.enqueue(() => this.refreshStatus());
   }
   injectIdStyle() {
     const style = document.createElement("style");
@@ -422,6 +447,7 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
   }
   onunload() {
     this.clearDebounce();
+    if (this.pollHandle !== null) window.clearInterval(this.pollHandle);
   }
   async saveSettings() {
     await this.savePluginData();
@@ -511,15 +537,16 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
     const content = assignIds(original, this.deviceLetter, this.issuedFloor());
     if (content !== original) await this.writeOwn(file, content);
     this.recordIssued(content);
-    await this.push(content);
+    if (await this.push(content)) await this.refreshStatus();
   }
   async push(content) {
     const target = this.target();
-    if (!target) return;
+    if (!target) return false;
     await putFile(target, REMOTE_TODO, content);
     this.lastPushedContent = content;
     await this.savePluginData();
     this.setStatus(`bw-queue: pushed ${clock()}`);
+    return true;
   }
   async refreshStatus() {
     const target = this.target();

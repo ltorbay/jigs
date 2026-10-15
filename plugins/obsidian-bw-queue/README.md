@@ -3,7 +3,7 @@
 Obsidian plugin that bridges the Bonewake TODO note and the `bonewake-queue` repo (see `bonewake/docs/PIPELINE.md`, briefs A and B). Requires Obsidian 1.8.7+ (per-device local storage). Runs on desktop, iOS and Android: network calls go through Obsidian's `requestUrl` only.
 
 - On every edit of the TODO note (debounced), open task lines (`- [ ] `) without a block id get ` ^bw-<letter>NNNN` (e.g. `^bw-m0012`): `<letter>` is a random `[a-z]` picked once per device and kept in that device's local storage (never synced, shown read-only in settings), and NNNN counts per letter, so two devices with different letters never issue the same id (check the letters differ in settings), then the whole note is PUT to `queue/TODO.md` through the GitHub Contents API. An unchanged note is not pushed twice.
-- On vault open (toggle) and on `bw-queue: refresh status`, `queue/status.json` is fetched and each tracked line is repainted as `<text> <glyph> #<issue> ^bw-<letter>NNNN`.
+- After every push, on vault open (toggle), every `Status refresh (minutes)` (default 10), when the app returns to the foreground, and on `bw-queue: refresh status`, `queue/status.json` is fetched and each tracked line is repainted as `<text> <glyph> #<issue> ^bw-<letter>NNNN`. The timed and foreground refreshes skip while an edit is waiting out its debounce; `0` minutes turns both off.
 
 | Glyph | States |
 |---|---|

@@ -8,6 +8,7 @@ export interface BwQueueSettings {
   todoPath: string;
   debounceSeconds: number;
   paintOnOpen: boolean;
+  statusPollMinutes: number;
 }
 
 export const DEFAULT_SETTINGS: BwQueueSettings = {
@@ -17,6 +18,7 @@ export const DEFAULT_SETTINGS: BwQueueSettings = {
   todoPath: "1. Projects/Bonewake/TODO.md",
   debounceSeconds: 20,
   paintOnOpen: true,
+  statusPollMinutes: 10,
 };
 
 export class BwQueueSettingTab extends PluginSettingTab {
@@ -68,6 +70,19 @@ export class BwQueueSettingTab extends PluginSettingTab {
         toggle.setValue(settings.paintOnOpen).onChange(async (value) => {
           settings.paintOnOpen = value;
           await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Status refresh (minutes)")
+      .setDesc("Repaint from queue/status.json on this interval and when the app returns to the foreground. 0 turns both off; a push always repaints.")
+      .addText((text) =>
+        text.setValue(String(settings.statusPollMinutes)).onChange(async (value) => {
+          const minutes = Number(value);
+          if (!Number.isFinite(minutes) || minutes < 0) return;
+          settings.statusPollMinutes = minutes;
+          await this.plugin.saveSettings();
+          this.plugin.restartStatusPoll();
         }),
       );
   }

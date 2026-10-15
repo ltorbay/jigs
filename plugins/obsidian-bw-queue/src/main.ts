@@ -19,6 +19,7 @@ export default class BwQueuePlugin extends Plugin {
   private lastPushedContent: string | null = null;
   deviceLetter = "";
   private debounceHandle: number | null = null;
+  private pollHandle: number | null = null;
   private selfWrites = 0;
   private missingTokenNoticed = false;
   private queue: Promise<void> = Promise.resolve();
@@ -40,6 +41,22 @@ export default class BwQueuePlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       if (this.settings.paintOnOpen) this.enqueue(() => this.refreshStatus());
     });
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "visible" && this.settings.statusPollMinutes > 0) this.backgroundRefresh();
+    });
+    this.restartStatusPoll();
+  }
+
+  restartStatusPoll(): void {
+    if (this.pollHandle !== null) window.clearInterval(this.pollHandle);
+    this.pollHandle = null;
+    const minutes = this.settings.statusPollMinutes;
+    if (minutes > 0) this.pollHandle = window.setInterval(() => this.backgroundRefresh(), minutes * 60_000);
+  }
+
+  private backgroundRefresh(): void {
+    if (this.debounceHandle !== null || !this.settings.token) return;
+    this.enqueue(() => this.refreshStatus());
   }
 
   private injectIdStyle(): void {
@@ -52,6 +69,7 @@ export default class BwQueuePlugin extends Plugin {
 
   onunload(): void {
     this.clearDebounce();
+    if (this.pollHandle !== null) window.clearInterval(this.pollHandle);
   }
 
   async saveSettings(): Promise<void> {
@@ -157,16 +175,17 @@ export default class BwQueuePlugin extends Plugin {
     const content = assignIds(original, this.deviceLetter, this.issuedFloor());
     if (content !== original) await this.writeOwn(file, content);
     this.recordIssued(content);
-    await this.push(content);
+    if (await this.push(content)) await this.refreshStatus();
   }
 
-  private async push(content: string): Promise<void> {
+  private async push(content: string): Promise<boolean> {
     const target = this.target();
-    if (!target) return;
+    if (!target) return false;
     await putFile(target, REMOTE_TODO, content);
     this.lastPushedContent = content;
     await this.savePluginData();
     this.setStatus(`bw-queue: pushed ${clock()}`);
+    return true;
   }
 
   private async refreshStatus(): Promise<void> {
