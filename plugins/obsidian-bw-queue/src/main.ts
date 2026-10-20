@@ -4,9 +4,11 @@ import { assignIds, highestId, isDeviceLetter, randomDeviceLetter } from "./ids"
 import { getFile, putFile, RepoTarget } from "./github";
 import { BwQueueSettings, BwQueueSettingTab, DEFAULT_SETTINGS } from "./settings";
 import { parseStatus, repaint } from "./status";
+import { EMPTY_NOTE, mergeVerify, parseVerify } from "./verify";
 
 const REMOTE_TODO = "queue/TODO.md";
 const REMOTE_STATUS = "queue/status.json";
+const REMOTE_VERIFY = "queue/verify.json";
 const DEVICE_KEY = "bw-queue-device";
 
 interface PluginData {
@@ -202,7 +204,26 @@ export default class BwQueuePlugin extends Plugin {
     const original = await this.app.vault.read(file);
     const painted = repaint(original, status);
     if (painted !== original) await this.writeOwn(file, painted);
+    await this.pullChecks(target);
     this.setStatus(`bw-queue: status ${clock()}`);
+  }
+
+  private async pullChecks(target: RepoTarget): Promise<void> {
+    const remote = await getFile(target, REMOTE_VERIFY);
+    if (!remote) return;
+    const items = parseVerify(remote.content);
+    const path = normalizePath(this.settings.verifyPath);
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing !== null && !(existing instanceof TFile)) throw new Error(`${path} is not a file`);
+    const original = existing ? await this.app.vault.read(existing) : EMPTY_NOTE;
+    const merged = mergeVerify(original, items);
+    if (existing) {
+      if (merged !== original) await this.app.vault.modify(existing, merged);
+      return;
+    }
+    const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+    if (folder && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+    await this.app.vault.create(path, merged);
   }
 
   private report(error: unknown): void {

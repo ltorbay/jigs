@@ -4,7 +4,7 @@ const mode = process.argv[2] ?? "dev";
 
 if (mode === "test") {
   await esbuild.build({
-    entryPoints: ["src/ids.ts", "src/status.ts", "src/encoding.ts", "src/hidden-id.ts"],
+    entryPoints: ["src/ids.ts", "src/status.ts", "src/encoding.ts", "src/hidden-id.ts", "src/verify.ts"],
     outdir: "test-build",
     bundle: false,
     format: "esm",

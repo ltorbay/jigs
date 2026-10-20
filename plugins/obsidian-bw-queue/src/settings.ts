@@ -6,6 +6,7 @@ export interface BwQueueSettings {
   repo: string;
   branch: string;
   todoPath: string;
+  verifyPath: string;
   debounceSeconds: number;
   paintOnOpen: boolean;
   statusPollMinutes: number;
@@ -16,6 +17,7 @@ export const DEFAULT_SETTINGS: BwQueueSettings = {
   repo: "ltorbay/bonewake-queue",
   branch: "main",
   todoPath: "1. Projects/Bonewake/TODO.md",
+  verifyPath: "1. Projects/Bonewake/Verify.md",
   debounceSeconds: 20,
   paintOnOpen: true,
   statusPollMinutes: 10,
@@ -50,6 +52,7 @@ export class BwQueueSettingTab extends PluginSettingTab {
     this.addText("Repository", "owner/name", "repo");
     this.addText("Branch", "Branch the queue files live on.", "branch");
     this.addText("TODO note", "Vault path of the TODO note.", "todoPath");
+    this.addText("Checks note", "Vault path of the in-game checks note filled from queue/verify.json.", "verifyPath");
 
     new Setting(containerEl)
       .setName("Debounce (seconds)")
@@ -87,7 +90,7 @@ export class BwQueueSettingTab extends PluginSettingTab {
       );
   }
 
-  private addText(name: string, desc: string, key: "repo" | "branch" | "todoPath"): void {
+  private addText(name: string, desc: string, key: "repo" | "branch" | "todoPath" | "verifyPath"): void {
     const settings = this.plugin.settings;
     new Setting(this.containerEl)
       .setName(name)

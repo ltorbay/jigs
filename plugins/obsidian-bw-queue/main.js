@@ -276,6 +276,7 @@ var DEFAULT_SETTINGS = {
   repo: "ltorbay/bonewake-queue",
   branch: "main",
   todoPath: "1. Projects/Bonewake/TODO.md",
+  verifyPath: "1. Projects/Bonewake/Verify.md",
   debounceSeconds: 20,
   paintOnOpen: true,
   statusPollMinutes: 10
@@ -300,6 +301,7 @@ var BwQueueSettingTab = class extends import_obsidian3.PluginSettingTab {
     this.addText("Repository", "owner/name", "repo");
     this.addText("Branch", "Branch the queue files live on.", "branch");
     this.addText("TODO note", "Vault path of the TODO note.", "todoPath");
+    this.addText("Checks note", "Vault path of the in-game checks note filled from queue/verify.json.", "verifyPath");
     new import_obsidian3.Setting(containerEl).setName("Debounce (seconds)").setDesc("Quiet time after the last edit before pushing.").addText(
       (text) => text.setValue(String(settings.debounceSeconds)).onChange(async (value) => {
         const seconds = Number(value);
@@ -393,9 +395,96 @@ function repaint(text, status) {
   return text.split("\n").map((line) => repaintLine(line, status)).join("\n");
 }
 
+// src/verify.ts
+var PR_URL = "https://github.com/ltorbay/bonewake/pull/";
+var CURSOR_LINE = /^verify_cursor:[ \t]*(\d+)[ \t]*$/m;
+var EMPTY_NOTE = "---\nverify_cursor: 0\n---\n";
+function parseVerify(json) {
+  const raw = JSON.parse(json);
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("verify.json is not an object");
+  }
+  const items = raw.items;
+  if (!Array.isArray(items)) throw new Error("verify.json has no items array");
+  return items.filter(isItem).sort((a, b) => a.seq - b.seq);
+}
+function isItem(value) {
+  if (value === null || typeof value !== "object") return false;
+  const { seq, pr, group, text } = value;
+  return Number.isInteger(seq) && seq > 0 && Number.isInteger(pr) && typeof group === "string" && group.trim() !== "" && !/[\r\n]/.test(group) && typeof text === "string" && text.trim() !== "" && !/[\r\n]/.test(text);
+}
+function checkId(seq) {
+  return `vf-${String(seq).padStart(4, "0")}`;
+}
+function readCursor(note) {
+  const front = frontmatter(note.replace(/\r\n/g, "\n"));
+  const match = front === null ? null : CURSOR_LINE.exec(front.body);
+  return match ? Number(match[1]) : 0;
+}
+function mergeVerify(note, items) {
+  const crlf = note.includes("\r\n");
+  let text = note.replace(/\r\n/g, "\n");
+  const cursor = readCursor(text);
+  const fresh = items.filter((item) => item.seq > cursor).sort((a, b) => a.seq - b.seq);
+  if (fresh.length === 0) return note;
+  for (const item of fresh) {
+    const id = checkId(item.seq);
+    if (new RegExp(`\\^${id}\\s*$`, "m").test(text)) continue;
+    text = appendToGroup(text, item.group.trim(), `- [ ] ${item.text.trim()} [#${item.pr}](${PR_URL}${item.pr}) ^${id}`);
+  }
+  text = writeCursor(text, Math.max(cursor, ...fresh.map((item) => item.seq)));
+  return crlf ? text.replace(/\n/g, "\r\n") : text;
+}
+function frontmatter(text) {
+  if (!text.startsWith("---\n")) return null;
+  const close = text.indexOf("\n---", 3);
+  if (close === -1) return null;
+  const after = close + 4;
+  if (after < text.length && text[after] !== "\n") return null;
+  return { body: text.slice(4, close + 1), end: after };
+}
+function writeCursor(text, cursor) {
+  const front = frontmatter(text);
+  if (front === null) return `---
+verify_cursor: ${cursor}
+---
+${text}`;
+  const body = CURSOR_LINE.test(front.body) ? front.body.replace(CURSOR_LINE, `verify_cursor: ${cursor}`) : `${front.body}verify_cursor: ${cursor}
+`;
+  return `---
+${body}---${text.slice(front.end)}`;
+}
+function appendToGroup(text, group, line) {
+  const lines = text.split("\n");
+  const heading = lines.findIndex((l) => l.trimEnd() === `## ${group}`);
+  if (heading === -1) {
+    while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+    return `${lines.join("\n")}
+
+## ${group}
+
+${line}
+`;
+  }
+  let next = lines.findIndex((l, i) => i > heading && /^#{1,2} /.test(l));
+  if (next === -1) next = lines.length;
+  let last = next - 1;
+  while (last > heading && lines[last].trim() === "") last--;
+  const insertAt = last === heading ? heading + 1 : last + 1;
+  const insert = last === heading ? ["", line] : [line];
+  lines.splice(insertAt, 0, ...insert);
+  if (insertAt + insert.length < lines.length && lines[insertAt + insert.length].trim() !== "") {
+    lines.splice(insertAt + insert.length, 0, "");
+  }
+  const joined = lines.join("\n");
+  return joined.endsWith("\n") ? joined : `${joined}
+`;
+}
+
 // src/main.ts
 var REMOTE_TODO = "queue/TODO.md";
 var REMOTE_STATUS = "queue/status.json";
+var REMOTE_VERIFY = "queue/verify.json";
 var DEVICE_KEY = "bw-queue-device";
 var BwQueuePlugin = class extends import_obsidian4.Plugin {
   constructor() {
@@ -562,7 +651,25 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
     const original = await this.app.vault.read(file);
     const painted = repaint(original, status);
     if (painted !== original) await this.writeOwn(file, painted);
+    await this.pullChecks(target);
     this.setStatus(`bw-queue: status ${clock()}`);
+  }
+  async pullChecks(target) {
+    const remote = await getFile(target, REMOTE_VERIFY);
+    if (!remote) return;
+    const items = parseVerify(remote.content);
+    const path = (0, import_obsidian4.normalizePath)(this.settings.verifyPath);
+    const existing = this.app.vault.getAbstractFileByPath(path);
+    if (existing !== null && !(existing instanceof import_obsidian4.TFile)) throw new Error(`${path} is not a file`);
+    const original = existing ? await this.app.vault.read(existing) : EMPTY_NOTE;
+    const merged = mergeVerify(original, items);
+    if (existing) {
+      if (merged !== original) await this.app.vault.modify(existing, merged);
+      return;
+    }
+    const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+    if (folder && !this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+    await this.app.vault.create(path, merged);
   }
   report(error) {
     const message = error instanceof Error ? error.message : String(error);
