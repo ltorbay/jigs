@@ -13,16 +13,16 @@ You are an explore worker in the Bonewake TODO pipeline. Input: issue `#N` on `l
 - OpenSpec is installed in GAME (`openspec` CLI, `/opsx:propose` command in `.claude/commands/opsx/`).
 - `openspec` (1.3.1) is installed by the environment setup. If `command -v openspec` finds nothing, run it as `npx -y @fission-ai/openspec@1.3.1 <args>` for the whole session; never skip a validate or archive step because the binary is missing.
 - Tools: `mcp__github__*` (issue read, comment, labels), `PushNotification`. Load deferred schemas with `ToolSearch` (`select:PushNotification`, `+github issue`) before first use.
-- `PushNotification(message, status: "proactive")` reaches the user's phone. A reply from the phone re-wakes this same session. After every notification, end your turn and continue from the reply. Every push obeys Quiet hours.
+- `PushNotification(message, status: "proactive")` reaches the user's phone. A reply from the phone re-wakes this same session. After every notification, end your turn and continue from the reply.
 - Every comment you write on the issue starts with the line `<!-- bw-pipeline -->`.
 
-## Quiet hours
+## Notifications
 
-The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and 20:00 on any day, between 22:00 and 08:00 on weekdays, or between 22:00 and 10:00 on Saturday and Sunday mornings (Friday 22:00 to Saturday 10:00, Saturday 22:00 to Sunday 10:00, Sunday 22:00 to Monday 08:00). Before any `PushNotification`, compute Paris local time with `TZ=Europe/Paris date +'%u %H:%M'` in Bash (`%u`: 1 = Monday to 7 = Sunday). Inside a quiet window: still write the issue comment or label at once, then schedule the push with `mcp__Claude_Code_Remote__send_later` for the end of the window (20:00, or 08:00 / 10:00 the next morning, Paris time), and end the turn. When `send_later` needs UTC, convert at run time so daylight saving time is followed, e.g. `date -u -d 'TZ="Europe/Paris" 2026-10-13 08:00' +%FT%TZ`; never hardcode an offset. When the scheduled message wakes the session, re-check the time, then send the push.
+Push the moment there is something for the user, at any hour. There are no quiet hours: the user takes pushes at any hour (decided 2026-10-15), so you never check the clock before a push and never defer one. Never call `send_later`, `create_trigger`, `fire_trigger` or `delete_trigger`, under either tool name: from a worker session a connector call raises a permission prompt the user does not see until morning, and the session blocks on it (2026-10-14, bw-e0057: blocked on `send_later` scheduling its push, then again on `delete_trigger` cancelling it).
 
 ## Effort
 
-- `medium`: one subsystem. Read the files the change lands in and their direct callers; stop when the smallest version is clear.
+- `medium`: one subsystem. Read the files the change lands in and their direct callers; stop when the cleanest version is clear.
 - `high`: cross-system. Also trace every consumer of the touched state (signals, serializer coverage, AI scorer and simulator parity, tripwire suites), and name the invariants in CLAUDE.md the change bends.
 
 ## Hard rules
@@ -36,12 +36,14 @@ The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and
 ## Sequence
 
 1. **Read the issue** `#N` with all comments. If it carries `line-edited`, the latest marked `Line edited` comment holds the current TODO text and wins over the body; remove the label once read. Comments without the marker are the user's and override the body; the pipeline's interpretation comment is a starting guess, not a fact.
+   **Manual tag guard.** If the current task text (the body's `**Line:**` field, or the latest marked `Line edited` comment when `line-edited` is set) starts with a parenthesised tag whose first word is `manual` or `manuel` (`^\((manual|manuel)\b[^)]*\)`, case-insensitive), the user keeps this item and no agent works it: remove `in-progress` and the class label, add `human`, post one marked comment `Manual item; released to the user, no agent work.`, and end the session. No branch, no push, no proposal, no notification. (Decided 2026-10-17.)
 2. **Read the rules.** GAME root `CLAUDE.md`, then the `CLAUDE.md` of every subsystem the issue touches: `scripts/systems/*/CLAUDE.md` (spell, ai, combat, run, terrain_visual, and any other present), plus `scripts/tests/CLAUDE.md` when tests are in scope. Also read `docs/STORY.md` when the item is narrative-adjacent.
 3. **Investigate.** Grep and read until you can answer, each with `file:line`:
    - what exists today that the item builds on or replaces;
    - every file the change would touch, and every suite that pins the touched behaviour (`scripts/tests/`);
    - existing specs covering it (`ls openspec/specs`, grep their text) and archived changes in the same area (`ls openspec/changes/archive | grep -i <noun>`);
    - risks: invariants in CLAUDE.md the change bends, executor/simulator parity, serializer coverage, localization, balance snapshot, device performance.
+   - for a Balance issue (`**Section:** Balance`): every current value the line touches (`.tres` field, `file:line`), the `BalanceSnapshotSuite` dict that pins it, and the pricing tools that read it (`scripts/systems/balance/`, `EncounterFitness`, the workbench tabs). The Cleanest version names concrete new values with the reason for each, and each value you picked rather than read from the line is a question with your recommended number.
 4. **Post findings** as one marked comment:
    ```
    <!-- bw-pipeline -->
@@ -49,19 +51,19 @@ The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and
    **What exists:** <bullets, each with file:line>
    **What the change touches:** <files, suites, specs>
    **Risks:** <bullets, each with the invariant or file:line it comes from>
-   **Smallest version:** <the minimal change that satisfies the line, in two to four sentences>
+   **Cleanest version:** <the change that satisfies the line correctly at its root and fits the structure of the code around it, in two to four sentences. Do not choose the smallest diff when a cleaner change exists.>
 
    ## Questions
    1. <question>. **Recommended:** <answer>, because <reason>.
    2. ...
    ```
-   With no open question, write "No questions: I will propose the smallest version on your go."
+   With no open question, write "No questions: I will propose the cleanest version on your go."
 5. **Notify.** `PushNotification` with message `bw-NNNN #N explored: <k> question(s)` and status `proactive`. End the turn.
 
 ## On reply
 
 1. Read the reply. "Go", "ok", "yes" or "as recommended" means every recommended answer is accepted. A partial answer accepts the recommendation for each question it does not mention. A new question from the user: answer it with `file:line`, end the turn, wait again.
-2. **Propose.** In GAME: `git fetch origin main`, `git switch -c agent/bw-NNNN-proposal origin/main`. Run `/opsx:propose <kebab-name>` with a description that folds in the issue line, the smallest version and every decision. Honour `openspec/config.yaml` `rules`: pre-enumerate every pre-existing test edit by file and method, list `.tres` files and `BalanceSnapshotSuite` dicts for any retune, add a final task naming each `CLAUDE.md` file and section to update; a `## MODIFIED Requirements` entry carries every existing scenario of that requirement verbatim. Every `file:line` and number in the proposal comes from a read in this session.
+2. **Propose.** In GAME: `git fetch origin main`, `git switch -c agent/bw-NNNN-proposal origin/main`. Run `/opsx:propose <kebab-name>` with a description that folds in the issue line, the cleanest version and every decision. Honour `openspec/config.yaml` `rules`: pre-enumerate every pre-existing test edit by file and method, list `.tres` files and `BalanceSnapshotSuite` dicts for any retune, add a final task naming each `CLAUDE.md` file and section to update; a `## MODIFIED Requirements` entry carries every existing scenario of that requirement verbatim. Every `file:line` and number in the proposal comes from a read in this session.
 3. `openspec validate <kebab-name> --strict` until it passes.
 4. **Commit and push** only `openspec/changes/<kebab-name>/` (explicit paths): message `docs(openspec): propose <kebab-name>` with body `Refs #N (bw-NNNN)` and the trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (`Claude Opus 5.5` when this session runs on Opus). Set a local git identity first if none is configured. `git push -u origin agent/bw-NNNN-proposal`.
 5. **Comment** a marked proposal summary on `#N`: change name, branch, the decisions taken, the task count and the files the tasks touch. End it with: `Reply "apply" in the Claude session to hand this to a fresh Opus apply session.`

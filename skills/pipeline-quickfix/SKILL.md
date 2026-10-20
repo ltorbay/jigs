@@ -1,6 +1,6 @@
 ---
 name: pipeline-quickfix
-description: Opus worker session of the Bonewake TODO pipeline, parameterized by a GitHub issue number on ltorbay/bonewake. Fixes a small no-mechanic item (copy, fr.po, rename, wrong label, logged crash, cited file:line), runs the test suite and the verify ladder, writes the backfill-spec delta, pushes one commit on agent/bw-NNNN, opens a PR to main, notifies the phone, then iterates on the user's review replies by amending the single commit. Use when a session prompt says to follow pipeline-quickfix for an issue.
+description: Opus worker session of the Bonewake TODO pipeline, parameterized by a GitHub issue number on ltorbay/bonewake. Fixes a small no-mechanic item (copy, fr.po, rename, wrong label, logged crash, cited file:line, a Balance line that names its new value), runs the test suite and the verify ladder, writes the backfill-spec delta, pushes one commit on agent/bw-NNNN, opens a PR to main, notifies the phone, then iterates on the user's review replies by amending the single commit. Use when a session prompt says to follow pipeline-quickfix for an issue.
 metadata:
   version: "1.0"
 ---
@@ -12,18 +12,18 @@ You are a quickfix worker in the Bonewake TODO pipeline. Input: issue `#N` on `l
 - The clone of `ltorbay/bonewake` (locate it with `ls /home/user`; expected `/home/user/bonewake`), called GAME below. It is the only repository in this session: you do not have the queue repo or the jigs repo. Everything about the item (bw id, section, class, the full line, triage's interpretation) is in the issue body; `queue/status.json` belongs to triage and you never touch it. This file is GAME `.claude/skills/pipeline-quickfix/SKILL.md`; re-read it if your context lost it.
 - GAME is a Godot 4.6.1 project with a Rust GDExtension. The environment setup provisions `godot` and Rust; `tools/test.sh` builds the native library itself when it is missing.
 - `openspec` (1.3.1) is installed by the environment setup. If `command -v openspec` finds nothing, run it as `npx -y @fission-ai/openspec@1.3.1 <args>` for the whole session; never skip a validate or archive step because the binary is missing.
-- Tools: `mcp__github__*` (issue read, comment, labels, pull requests), `PushNotification`, and `send_later` for quiet hours only. Never call `subscribe_pr_activity`: it starts a 50-minute self check-in loop that wakes this session (and the user's permission prompts) for nothing; the hourly triage routine repairs PRs that go red or conflict. Load deferred schemas with `ToolSearch` (`select:PushNotification`, `+github pull`, `+github issue`) before first use.
-- `PushNotification(message, status: "proactive")` reaches the user's phone. A reply from the phone re-wakes this same session. After every notification, end your turn and continue from the reply. Every push obeys Quiet hours.
+- Tools: `mcp__github__*` (issue read, comment, labels, pull requests), `PushNotification`. Never call `subscribe_pr_activity`: it starts a 50-minute self check-in loop that wakes this session (and the user's permission prompts) for nothing; the hourly triage routine repairs PRs that go red or conflict. Load deferred schemas with `ToolSearch` (`select:PushNotification`, `+github pull`, `+github issue`) before first use.
+- `PushNotification(message, status: "proactive")` reaches the user's phone. A reply from the phone re-wakes this same session. After every notification, end your turn and continue from the reply.
 - Every comment you write on an issue or PR starts with the line `<!-- bw-pipeline -->`.
 
-## Quiet hours
+## Notifications
 
-The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and 20:00 on any day, between 22:00 and 08:00 on weekdays, or between 22:00 and 10:00 on Saturday and Sunday mornings (Friday 22:00 to Saturday 10:00, Saturday 22:00 to Sunday 10:00, Sunday 22:00 to Monday 08:00). Before any `PushNotification`, compute Paris local time with `TZ=Europe/Paris date +'%u %H:%M'` in Bash (`%u`: 1 = Monday to 7 = Sunday). Inside a quiet window: still write the issue comment or label at once, then schedule the push with `mcp__Claude_Code_Remote__send_later` for the end of the window (20:00, or 08:00 / 10:00 the next morning, Paris time), and end the turn. When `send_later` needs UTC, convert at run time so daylight saving time is followed, e.g. `date -u -d 'TZ="Europe/Paris" 2026-10-13 08:00' +%FT%TZ`; never hardcode an offset. When the scheduled message wakes the session, re-check the time, then send the push.
+Push the moment there is something for the user, at any hour. There are no quiet hours: the user takes pushes at any hour (decided 2026-10-15), so you never check the clock before a push and never defer one. Never call `send_later`, `create_trigger`, `fire_trigger` or `delete_trigger`, under either tool name: from a worker session a connector call raises a permission prompt the user does not see until morning, and the session blocks on it (2026-10-14, bw-e0057: blocked on `send_later` scheduling its push, then again on `delete_trigger` cancelling it).
 
 ## Hard rules
 
-- Never touch numeric balance values in any `.tres` (damage, HP, costs, ranges, weights, multipliers, pool odds). Text fields in `.tres` (names, descriptions, dialogue lines) are allowed.
-- Never edit `scripts/tests/balance_snapshot_suite.gd`, unless the issue is a rename and the snapshot must follow the renamed identifier with every value unchanged.
+- Never touch numeric balance values in any `.tres` (damage, HP, costs, ranges, weights, multipliers, pool odds), except on a **balance quickfix**: an issue whose `**Section:**` is `Balance` and whose line names the target and the new value or exact delta. Then change exactly the named values and nothing else (no "while I am here" retune of a neighbour). A Balance line that names no value is not a quickfix: relabel it `shallow` as below. Text fields in `.tres` (names, descriptions, dialogue lines) are always allowed.
+- Never edit `scripts/tests/balance_snapshot_suite.gd`, except to follow a renamed identifier with every value unchanged, or, on a balance quickfix, to update the literals of exactly the values you changed. Those literal updates are pre-authorised and are not a drift blocker; any other assertion edit in that file still is. Name every changed value as `file: field old -> new` in the PR body.
 - Never push `main`, never use a refspec that updates it (`HEAD:main`), never delete a remote branch. Push only `agent/bw-NNNN`.
 - Never merge the PR, never enable auto-merge, never close the issue. The user merges (squash).
 - Exactly one commit on the branch, at every moment it is pushed.
@@ -33,10 +33,11 @@ The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and
 ## Sequence
 
 1. **Read.** Fetch issue `#N` with its comments. If the issue carries `line-edited`, the user changed the TODO line after triage: the latest marked `Line edited` comment holds the current text and wins over the body; remove the label once you have read it. Read GAME `CLAUDE.md` (root), and the subsystem `CLAUDE.md` of every directory you will touch (`scripts/systems/*/CLAUDE.md`, `scripts/tests/CLAUDE.md` before writing a test). Comments without the marker are the user's and override the issue body.
+   **Manual tag guard.** If the current task text (the body's `**Line:**` field, or the latest marked `Line edited` comment when `line-edited` is set) starts with a parenthesised tag whose first word is `manual` or `manuel` (`^\((manual|manuel)\b[^)]*\)`, case-insensitive), the user keeps this item and no agent works it: remove `in-progress` and the class label, add `human`, post one marked comment `Manual item; released to the user, no agent work.`, and end the session. No branch, no push, no proposal, no notification. (Decided 2026-10-17.)
 2. **Restate.** Write, for yourself and for the PR, ONE sentence: what is wrong, where (`file:line`), and what the fix is. Every concrete identifier in it must come from a read or a grep, not memory.
 3. **Unclear?** If the sentence cannot be written without guessing, post a marked comment with your best guess and one question, `PushNotification` (`bw-NNNN #N: one question before I fix`), end the turn, and resume from the reply at step 2.
 4. **Branch.** In GAME: `git fetch origin main`, `git switch -c agent/bw-NNNN origin/main`. If the branch already exists on the remote (a previous session), `git switch -c agent/bw-NNNN origin/agent/bw-NNNN` and continue from it.
-5. **Implement** the smallest fix that satisfies the sentence. Follow the root CLAUDE.md conventions (typing, no comments by default, no em or en dashes in player-facing copy, `fr.po` updated whenever an English msgid changes, `TranslatableFields` for new text fields).
+5. **Implement** the cleanest fix that satisfies the sentence: correct at its root and consistent with the code around it, not the smallest diff. Follow the root CLAUDE.md conventions (typing, no comments by default, no em or en dashes in player-facing copy, `fr.po` updated whenever an English msgid changes, `TranslatableFields` for new text fields).
 6. **Test.** Run the suite with the grep contract, quoted verbatim from GAME root `CLAUDE.md`:
    ```bash
    tools/test.sh | grep -E '^\[(FAIL|DONE)'
@@ -52,7 +53,7 @@ The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and
      ```bash
      godot --headless --path . --quit-after 600 2>&1 | grep -iE 'error|warning' | head -30
      ```
-   - Manual half: if the change is visible (UI, layout, copy on screen, animation), write a repro script for the PR body: entry point, steps, the expected observation as a checkable sentence. You cannot see the screen; never claim a visual check you did not run.
+   - Manual half: write the PR body's Manual check block (step 13): `required` with a scripted repro if the change is visible (UI, layout, copy on screen, animation), `watch` if it is judged in play, else `none` with its reason. You cannot see the screen; never claim a visual check you did not run.
 8. **Backfill spec.** Follow GAME `.claude/skills/backfill-spec/SKILL.md` steps 1 to 5: write `openspec/changes/backfill-<kebab>/` (proposal, delta spec, checked tasks) and pass `openspec validate <name> --strict`. Then run its step 7 in this branch, `openspec archive <name> -y`, and follow the archive protocol in GAME `.claude/opsx-protocols/archive.md` (no placeholder Purpose, `tools/spec_index.sh` if a spec is new). The PR review IS the backfill skill's review gate: the user reads the archived delta and the merged spec diff in the PR, and merging the PR lands code and spec together, so nothing is left to archive after merge. A `## MODIFIED Requirements` entry must carry every existing scenario of that requirement verbatim (GAME `openspec/config.yaml` `rules.specs`). If the fix changes no behaviour any spec covers (a typo in copy, a missing `fr.po` entry), write no change directory and say "no spec delta: <reason>" in the PR body.
 9. **Clean churn.** `git status --short`. `godot --headless` re-saves loaded `.tres` files stripping `uid=` lines; for every modified file you did not author whose diff is only removed `uid=` lines, `git checkout -- <file>`. In this clone there is no user work in progress, so that revert is safe here and only here.
 10. **Gate: nothing left unarchived.** `ls openspec/changes | grep -v '^archive$'` must print nothing this branch added. A `backfill-*` directory still there means step 8's archive did not run: run it now. Never commit or open the PR with a live change directory of yours.
@@ -71,8 +72,13 @@ The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and
     **Tests:** <the final [DONE] line>; boot smoke: <clean | lines>
     **Pre-existing failures:** <none | each [FAIL] line, shown failing on origin/main>
     **Spec:** openspec/changes/archive/<date>-<name>/ (archived in this PR; review the spec diff) | no spec delta: <reason>
-    **Manual check:** <repro script | not needed: <reason>>
+    **Manual check:** required | watch | none: <reason>
+    - <Group>: <one checkable sentence: where, what to do, what you should see>
     ```
+    The Manual check block follows `docs/PIPELINE.md` brief E1, because triage harvests it bullet by bullet into the user's checks note:
+    - `required`: a scripted repro the user must run. `watch`: behaviour seen during ordinary play, hard to stage (an optional setup may follow the sentence). `none`: no bullets, the reason is mandatory.
+    - A change to AI decisions, pacing or anything judged by feel is `watch` at least, never `none`: its tests pin the rule, not how it plays.
+    - `<Group>` is one of `Scenario Launcher`, `Any combat`, `Run`, `Tutorial`, `French locale`, `Phone`, `Real profile`, `Watch during play` (every `watch` bullet takes the last one). One bullet per observation; a French variant of an English check is its own bullet. No line breaks inside a bullet.
 14. **Issue.** Marked comment on `#N` with the PR link; add label `review`, remove `in-progress`.
 15. **Recap and notify.** Write the recap as your final message of the turn, because the phone notification opens this session and that message is what the user reads first. Shape:
     ```
@@ -80,7 +86,7 @@ The user is in Europe/Paris. No `PushNotification` may be sent between 17:00 and
     Fix: <the restated sentence, with file:line>
     Spec: archived <date>-<name> into <capability> (<+added / ~modified / -removed> requirements; one line on what the requirement now says) | no spec delta: <reason>
     Tests: <[DONE] line>; boot smoke clean
-    Check by hand: <one-line repro, or "nothing visible">
+    Check by hand: <required | watch | none>, <the bullets joined by "; ", or the none reason>
     Reply "merge" when merged, or tell me what to change.
     ```
     Then `PushNotification` with message `PR ready: <PR title> (#<n>), fix + spec archived` (or `fix, no spec delta`) and status `proactive`. End the turn.
@@ -107,7 +113,7 @@ Used when your prompt says "Repair mode for PR #<n>". The PR exists, its branch 
 5. Full suite green with the grep contract, boot smoke clean, churn cleaned, still exactly one commit (squash with `git reset --soft origin/main` then commit again with the original message and trailer if the rebase left more than one).
 6. `git push --force-with-lease origin agent/bw-NNNN`.
 7. Marked PR comment: `Repaired: rebased on main <short sha>` plus what conflicted or failed and how it was resolved. Update the PR body's Tests line.
-8. `PushNotification` with message `PR #<n> repaired, ready to merge: <PR title>` and status `proactive` (quiet hours apply). End the turn.
+8. `PushNotification` with message `PR #<n> repaired, ready to merge: <PR title>` and status `proactive`. End the turn.
 
 ## Gotchas (2026-10-12)
 
