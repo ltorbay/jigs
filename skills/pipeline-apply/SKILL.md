@@ -11,13 +11,13 @@ You are the apply worker of the Bonewake TODO pipeline. Input: issue `#N` on `lt
 
 - The clone of `ltorbay/bonewake` (locate it with `ls /home/user`; expected `/home/user/bonewake`), called GAME below. It is the only repository here. This file is GAME `.claude/skills/pipeline-apply/SKILL.md`; re-read it if your context lost it.
 - GAME is a Godot 4.6.1 project with a Rust GDExtension; the environment setup provisions `godot`, Rust and `openspec` 1.3.1. If `command -v openspec` finds nothing, run it as `npx -y @fission-ai/openspec@1.3.1 <args>` for the whole session.
-- Tools: `mcp__github__*` (issue read, comment, labels, pull requests, actions logs), `PushNotification`, and `send_later` for quiet hours only. Never call `subscribe_pr_activity` and never schedule check-ins: after a turn, end it and wait for the user.
+- Tools: `mcp__github__*` (issue read, comment, labels, pull requests, actions logs), `PushNotification`. Never call `subscribe_pr_activity` and never schedule check-ins: after a turn, end it and wait for the user.
 - `PushNotification(message, status: "proactive")` reaches the user's phone; a reply re-wakes this session.
 - Every comment you write on an issue or PR starts with the line `<!-- bw-pipeline -->`.
 
-## Quiet hours
+## Notifications
 
-The user is in Europe/Paris. No `PushNotification` between 17:00 and 20:00 on any day, between 22:00 and 08:00 on weekdays, or between 22:00 and 10:00 on Saturday and Sunday mornings. Before any push, compute Paris time with `TZ=Europe/Paris date +'%u %H:%M'`. Inside a window: write the comment or label at once, schedule the push with `send_later` for the end of the window (UTC computed at run time, never a hardcoded offset), end the turn.
+Push the moment there is something for the user, at any hour. There are no quiet hours: the user takes pushes at any hour (decided 2026-10-15), so you never check the clock before a push and never defer one. Never call `send_later`, `create_trigger`, `fire_trigger` or `delete_trigger`, under either tool name: from a worker session a connector call raises a permission prompt the user does not see until morning, and the session blocks on it (2026-10-14, bw-e0057: blocked on `send_later` scheduling its push, then again on `delete_trigger` cancelling it).
 
 ## Hard rules
 
@@ -29,7 +29,7 @@ The user is in Europe/Paris. No `PushNotification` between 17:00 and 20:00 on an
 
 ## Sequence
 
-1. **Read the contract.** Fetch issue `#N` with all comments (the explore findings, the user's answers, the proposal summary, and any `line-edited` comment, which wins over the body). In GAME: `git fetch origin`, `git switch -c agent/bw-NNNN origin/agent/bw-NNNN-proposal`. If `origin/agent/bw-NNNN` already exists (a previous apply session), switch to it instead and resume from its last completed task. Identify the change name from `openspec/changes/` (the one directory this branch added). Read its `proposal.md`, `design.md` if present, every delta under `specs/`, and `tasks.md`.
+1. **Read the contract.** Fetch issue `#N` with all comments (the explore findings, the user's answers, the proposal summary, and any `line-edited` comment, which wins over the body). In GAME: `git fetch origin`, `git switch -c agent/bw-NNNN origin/agent/bw-NNNN-proposal`. If `origin/agent/bw-NNNN` already exists (a previous apply session), switch to it instead and resume from its last completed task. If neither branch exists but the proposal already reached `main` (the user merged the proposal commit), `git switch -c agent/bw-NNNN origin/main` and take the change name from the latest marked `## Proposal:` comment on `#N`; `openspec/changes/<name>/` must exist on `main`, else it is a blocker. Otherwise identify the change name from `openspec/changes/` (the one directory this branch added). Read its `proposal.md`, `design.md` if present, every delta under `specs/`, and `tasks.md`.
 2. **Read the rules.** GAME root `CLAUDE.md`, the `CLAUDE.md` of every subsystem the tasks touch (`scripts/systems/*/CLAUDE.md`, `scripts/tests/CLAUDE.md` before writing tests), `.claude/opsx-protocols/apply.md`, `.claude/opsx-protocols/verify.md`, `.claude/opsx-protocols/archive.md`, and `openspec/config.yaml`.
 3. **Re-verify the proposal's facts.** For every `file:line`, identifier and number in the artifacts, open the file and confirm it still holds on `origin/main` (the proposal may be days old). A drifted fact that changes what a task means is a blocker; a moved line number is not, note it.
 4. **Implement** `tasks.md` in order. After each task or tight task group, run the suite with the grep contract and tick the task in `tasks.md`:
@@ -41,7 +41,7 @@ The user is in Europe/Paris. No `PushNotification` between 17:00 and 20:00 on an
    ```bash
    godot --headless --path . --quit-after 600 2>&1 | grep -iE 'error|warning' | head -30
    ```
-   For anything visible, write a manual repro for the PR body; you cannot see the screen, never claim a visual check you did not run.
+   Then write the PR body's Manual check block (step 9): `required` with a scripted repro for anything visible, `watch` for anything judged in play, else `none` with its reason; you cannot see the screen, never claim a visual check you did not run.
 6. **Archive in-branch.** `openspec archive <name> -y`, then the archive protocol's hygiene: a created spec gets a one-line Purpose and `tools/spec_index.sh` runs. `ls openspec/changes | grep -v '^archive$'` must print nothing this branch added. The PR review is the archive review: the user reads code and merged spec together, and merging lands both.
 7. **Clean churn.** `godot --headless` re-saves loaded `.tres` files stripping `uid=` lines; `git checkout -- <file>` every modified file you did not author whose diff is only removed `uid=` lines (safe in this clone, which holds no user work).
 8. **One commit.** `git reset --soft origin/main`, stage explicit paths, commit `feat(<area>): <change name in words>` (or `fix(...)`), body: one or two lines on what changed and `Refs #N (bw-NNNN)`, trailer `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Set a local git identity first if none is configured. `git push -u origin agent/bw-NNNN` (`--force-with-lease` if it already existed).
@@ -55,8 +55,13 @@ The user is in Europe/Paris. No `PushNotification` between 17:00 and 20:00 on an
    **Spec:** <capabilities touched, +added / ~modified / -removed requirements>
    **Tests:** <final [DONE] line>; boot smoke: <clean | lines>; tests added: <suite.method list>
    **Drift:** <every proposal fact that no longer held, every pre-existing test edit with its tasks.md id or quoted justification, or "none">
-   **Manual check:** <repro script | not needed: <reason>>
+   **Manual check:** required | watch | none: <reason>
+   - <Group>: <one checkable sentence: where, what to do, what you should see>
    ```
+   The Manual check block follows `docs/PIPELINE.md` brief E1, because triage harvests it bullet by bullet into the user's checks note:
+   - `required`: a scripted repro the user must run. `watch`: behaviour seen during ordinary play, hard to stage (an optional setup may follow the sentence). `none`: no bullets, the reason is mandatory.
+   - A change to AI decisions, pacing or anything judged by feel is `watch` at least, never `none`: its tests pin the rule, not how it plays.
+   - `<Group>` is one of `Scenario Launcher`, `Any combat`, `Run`, `Tutorial`, `French locale`, `Phone`, `Real profile`, `Watch during play` (every `watch` bullet takes the last one). One bullet per observation; a French variant of an English check is its own bullet. No line breaks inside a bullet.
 10. **Issue.** Marked comment on `#N` with the PR link; label `review`, remove `in-progress` and `approved`.
 11. **Recap and notify.** Your final message of the turn is what the user reads first when the notification opens this session:
     ```
@@ -66,7 +71,7 @@ The user is in Europe/Paris. No `PushNotification` between 17:00 and 20:00 on an
     Spec: archived into <capabilities> (+a / ~m / -r)
     Tests: <[DONE] line>; boot smoke clean
     Drift: <one line or "none">
-    Check by hand: <one-line repro, or "nothing visible">
+    Check by hand: <required | watch | none>, <the bullets joined by "; ", or the none reason>
     Reply "merge" when merged, or tell me what to change.
     ```
     Then `PushNotification` with `PR ready: <title> (#<n>), applied + archived` and status `proactive`. End the turn.

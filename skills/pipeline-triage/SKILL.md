@@ -1,6 +1,6 @@
 ---
 name: pipeline-triage
-description: Hourly triage routine of the Bonewake TODO pipeline. Reads the queue repo (TODO copy, status, usage), opens one labelled GitHub issue per new TODO line on ltorbay/bonewake, classifies it (manual, quickfix, shallow, deep, human, ask, stale; Balance lines included), enforces the WIP limit and the Fable gate, spawns worker sessions running pipeline-quickfix or pipeline-explore, batches ask questions into a daily digest, and writes queue/status.json. Use when a routine says "run pipeline triage" or invokes this file.
+description: Hourly triage routine of the Bonewake TODO pipeline. Reads the queue repo (TODO copy, status, usage), opens one labelled GitHub issue per new TODO line on ltorbay/bonewake, classifies it (manual, quickfix, shallow, deep, human, ask, stale; Balance lines included), enforces the WIP limit and the Fable gate, caps the work in flight, spawns worker sessions running pipeline-quickfix, pipeline-explore or pipeline-ask (one session per ask question, answered in that session), and writes queue/status.json. Use when a routine says "run pipeline triage" or invokes this file.
 metadata:
   version: "1.0"
 ---
@@ -13,11 +13,12 @@ You are the triage routine of the Bonewake TODO pipeline. You turn new lines of 
 WIP_LIMIT          = 2      # live shallow + deep sessions (quickfix sessions do not count)
 MAX_NEW_PER_RUN    = 20     # new ids triaged per run; the rest wait for the next hour
 QUICKFIX_PER_RUN   = 2      # quickfix sessions spawned per run
+ASK_PER_RUN        = 2      # ask sessions spawned per run
+LOAD_CAP           = 4      # open issues on the user's plate (in-progress, review, proposed); at or above it no new worker starts
 REPAIR_PER_RUN     = 1      # PR repair sessions spawned per run
 HOLD_HOURS         = 2      # shallow/deep wait this long after the interpretation comment; a grace window, the user never has to act on GitHub
 FABLE_GATE_PCT     = 80     # Fable weekly usage must be strictly below this
 USAGE_TRUST_DAYS   = 7      # older or missing usage.json counts as unknown = Fable available
-DIGEST_TIME_PARIS  = 13:05  # Europe/Paris local time; convert to UTC at run time (DST)
 GAME_REPO          = ltorbay/bonewake
 QUEUE_REPO         = ltorbay/bonewake-queue
 ENVIRONMENT_ID     = env_01GVFub1AjhgMuYaZA8wtFdS   # Bonewake cloud environment
@@ -31,7 +32,7 @@ Every comment you write on an issue starts with the line `<!-- bw-pipeline -->`.
 ## Environment
 
 - Two clones: the clone of `ltorbay/bonewake` and the clone of `ltorbay/bonewake-queue`. Locate them with `ls /home/user` (expected `/home/user/bonewake` and `/home/user/bonewake-queue`). Call them GAME and QUEUE below.
-- Tools: `mcp__github__*` (issues, comments, labels, PRs, actions), `mcp__Claude_Code_Remote__create_session`, `mcp__Claude_Code_Remote__list_sessions`, `mcp__Claude_Code_Remote__set_session_tags`, `mcp__Claude_Code_Remote__send_later`, `PushNotification`. If any is deferred, load its schema with `ToolSearch` first (`select:<name>` for the named ones; `+github issue`, `+github label`, `+github comment` to find the exact `mcp__github__*` names). Use no other mechanism to reach GitHub or sessions.
+- Tools: `mcp__github__*` (issues, comments, labels, PRs, actions), `mcp__Claude_Code_Remote__create_session`, `mcp__Claude_Code_Remote__list_sessions`, `mcp__Claude_Code_Remote__set_session_tags`. If any is deferred, load its schema with `ToolSearch` first (`select:<name>` for the named ones; `+github issue`, `+github label`, `+github comment` to find the exact `mcp__github__*` names). Use no other mechanism to reach GitHub or sessions.
 - No tool reads plan usage. The only usage source is `QUEUE/queue/usage.json`.
 - You may commit and push to QUEUE `main`, and only `queue/status.json` and `queue/verify.json`. You never commit, branch or push in GAME.
 
@@ -44,7 +45,7 @@ Every comment you write on an issue starts with the line `<!-- bw-pipeline -->`.
 
 ## Notifications
 
-Push at any hour: there are no quiet hours (decided 2026-10-15). `send_later` serves exactly one purpose here, scheduling the 13:05 digest (step 5); never use it to defer a push. Never grant `send_later`, `create_trigger`, `fire_trigger` or `delete_trigger` to a worker: from a worker session those connector calls raise permission prompts that block it until the user wakes up.
+Triage sends no push: every question reaches the user from the worker session that owns it, so the user's reply wakes that session (the daily ask digest was retired 2026-10-22: its questions sat on GitHub, where the user does not look). Workers push at any hour: there are no quiet hours (decided 2026-10-15). Never call `send_later`, and never grant `send_later`, `create_trigger`, `fire_trigger` or `delete_trigger` to a worker: from a worker session those connector calls raise permission prompts that block it until the user wakes up.
 
 ## Classes (rules, verbatim from the pipeline design)
 
@@ -55,7 +56,7 @@ Push at any hour: there are no quiet hours (decided 2026-10-15). `send_later` se
 | shallow | one subsystem, clear intent, no new rule | Fable medium explore, questions on the session |
 | deep | cross-system, new mechanic, rework / overhaul | Fable high explore, questions on the session |
 | human | art, pixellab, discord links, store, personal | label only |
-| ask | trailing `?`, French-only without a referent, under 6 words with no noun | one question carrying the agent's best guess, batched into a daily digest |
+| ask | trailing `?`, French-only without a referent, under 6 words with no noun | Opus ask session: one question with the agent's best guess, answered in the session, then a new class |
 | stale | nouns match an archived change or a recent commit | `done?` with the matching commit |
 
 Unsure means `ask`, never a guess. Lines may be French or English; classify the meaning, not the language.
@@ -110,11 +111,11 @@ For each parsed id absent from `status.json`, in file order, at most MAX_NEW_PER
      ```
    - Labels: `pipeline` plus the class. If adding a label fails because it does not exist, create it with the `mcp__github__*` label tool, then retry.
 5. **Route by class:**
-   - `quickfix`: spawn now (step 4.6) while fewer than QUICKFIX_PER_RUN quickfix sessions were spawned this run; otherwise leave the issue labelled `quickfix` without `in-progress`, and a later run spawns it (step 4 treats such issues as quickfix candidates, in TODO order (4.0), under the same per-run cap). No WIP count, no hold.
+   - `quickfix`: nothing now; step 4.7 spawns it this run, in TODO order, under QUICKFIX_PER_RUN and LOAD_CAP. No WIP count, no hold.
    - `manual`: nothing. Write `status.json[id] = {issue: 0, state: human, updated: now}` so the line is never re-triaged and the plugin paints it as the user's (👤). The tag is re-read on every run (step 3a.4): removing it hands the line back to triage.
    - `stale`: post `done?` with the matching commit sha and subject or the archived change directory.
    - `human`: label only, no comment beyond the issue body.
-   - `ask`: no comment now; the digest asks (step 5).
+   - `ask`: no comment now; an ask session asks the question (step 4.8).
    - `shallow`, `deep`: nothing now; the gate (step 4) promotes them once the hold elapses.
 6. Write `status.json[id] = {issue, state: <class>, updated: now}` (`issue: 0`, state `human` for `manual`).
 
@@ -160,54 +161,50 @@ Worker PR bodies carry a Manual check block (`docs/PIPELINE.md` brief E1). This 
 
 ### 4. Gate and spawn
 
-0. **TODO order.** Every candidate list in this step (apply hand-offs, explore candidates, leftover quickfix issues) is sorted by the user's TODO, never by issue number. Map each candidate issue to its bw id through `status.json`, and its bw id to its open `- [ ]` line in `queue/TODO.md` (step 1.3: section and file position). Within one list, a candidate's rank is its position among that list's candidates in the same section (the top candidate of `## Fixes` is rank 1, the top candidate of `## Features` is rank 1 too). Sort by rank ascending, then by section order in the file, then by issue number. This interleaves the sections, so the top item of each section starts before the second item of any. A candidate with no open TODO line (step 3a closes those, so this is a transient state) sorts after all others, by issue number.
+0. **TODO order.** Every candidate list in this step (apply hand-offs, explore candidates, quickfix candidates, ask candidates) is sorted by the user's TODO, never by issue number. Map each candidate issue to its bw id through `status.json`, and its bw id to its open `- [ ]` line in `queue/TODO.md` (step 1.3: section and file position). Within one list, a candidate's rank is its position among that list's candidates in the same section (the top candidate of `## Fixes` is rank 1, the top candidate of `## Features` is rank 1 too). Sort by rank ascending, then by section order in the file, then by issue number. This interleaves the sections, so the top item of each section starts before the second item of any. A candidate with no open TODO line (step 3a closes those, so this is a transient state) sorts after all others, by issue number.
 1. **Fable availability:** a reading is trusted while its `read_at` is at most USAGE_TRUST_DAYS old. Trusted: `fable_ok = usage.fable_weekly_pct < FABLE_GATE_PCT`. Missing file, unparseable file, null `read_at` or an older reading means unknown, and unknown means `fable_ok = true`: the usage file is written by a Mac that is not always on, and the fallback covers a wrong guess (a Fable session that hits its rate limit re-labels its issue `waiting:fable` and ends). Never block deep work on a missing usage file.
-2. **WIP:** `active = ` the number of sessions returned by `mcp__Claude_Code_Remote__list_sessions` that carry the tag `pipeline:active` AND are in a working status (an explore session idling on the user's reply still counts while its status is working).
-3. **Apply hand-offs first.** Open issues labelled `approved` (the user accepted an explore proposal; the user or the explore session sets the label, nothing fires triage early) and without `in-progress` or `review`, in TODO order (4.0), take WIP slots before any new explore: while `active < WIP_LIMIT`, spawn per 4.6 with model MODEL_QUICKFIX (Opus, always, whatever model wrote the proposal), tags `["pipeline:active", "bw:<bw-id>"]`, title `<bw-id> #<N> apply: <issue title, 60 chars>`, the quickfix tool list, and prompt `Read .claude/skills/pipeline-apply/SKILL.md in the bonewake clone in full and follow it for issue #<N> on ltorbay/bonewake (<bw-id>).` Then label `in-progress`, set status `in-progress`, `active += 1`. Before spawning, confirm the proposal is reachable: `agent/<bw-id>-proposal` exists on the remote (`git -C GAME ls-remote origin agent/<bw-id>-proposal`), or the change named by the latest marked `## Proposal:` comment exists as `openspec/changes/<name>/` on `origin/main` (the user merged the proposal commit; pipeline-apply branches from `main` then). If neither holds, post a marked comment that the proposal is missing and skip it.
+2. **Load (the user's plate):** `load = ` the number of open GAME_REPO issues labelled `pipeline` AND one of `in-progress`, `review` or `proposed`. Each one is a session working, a question waiting for the user's reply, or a PR or proposal waiting for the user's review. Every spawn in this step (4.3, 4.4, 4.7, 4.8) first requires `load < LOAD_CAP` and then does `load += 1`; at or above the cap, spawn nothing more this run and log `load cap reached`. Repair sessions (3b) are exempt: they fix work already on the plate. The count is by issue label, not by session status, because a session waiting on the user's reply may not show a working status (decided 2026-10-22, issue #245: after a day away the user must find at most LOAD_CAP items waiting).
+2b. **WIP:** `active = ` the number of sessions returned by `mcp__Claude_Code_Remote__list_sessions` that carry the tag `pipeline:active` AND are in a working status (an explore session idling on the user's reply still counts while its status is working).
+3. **Apply hand-offs first.** Open issues labelled `approved` (the user accepted an explore proposal; the user or the explore session sets the label, nothing fires triage early) and without `in-progress` or `review`, in TODO order (4.0), take WIP slots before any new explore: while `active < WIP_LIMIT` and `load < LOAD_CAP`, spawn per 4.6 with model MODEL_QUICKFIX (Opus, always, whatever model wrote the proposal), tags `["pipeline:active", "bw:<bw-id>"]`, title `<bw-id> #<N> apply: <issue title, 60 chars>`, the quickfix tool list, and prompt `Read .claude/skills/pipeline-apply/SKILL.md in the bonewake clone in full and follow it for issue #<N> on ltorbay/bonewake (<bw-id>).` Then label `in-progress`, set status `in-progress`, `active += 1`. Before spawning, confirm the proposal is reachable: `agent/<bw-id>-proposal` exists on the remote (`git -C GAME ls-remote origin agent/<bw-id>-proposal`), or the change named by the latest marked `## Proposal:` comment exists as `openspec/changes/<name>/` on `origin/main` (the user merged the proposal commit; pipeline-apply branches from `main` then). If neither holds, post a marked comment that the proposal is missing and skip it.
 3b. **Explore candidates:** open issues labelled `shallow` or `deep` without `in-progress`, `review`, `proposed` or `approved`, in TODO order (4.0). Skip a candidate when:
    - fewer than HOLD_HOURS have passed since its latest pipeline comment or, with none, since the issue was created;
    - any comment after the latest pipeline-authored one lacks the marker (a user correction). Handle it instead: re-read the line with the correction, reclassify or rewrite the interpretation in a new marked comment ("Updated interpretation: ..."), relabel if the class changed. The hold restarts from that comment.
-4. While `active < WIP_LIMIT` and candidates remain, take the next one:
+4. While `active < WIP_LIMIT`, `load < LOAD_CAP` and candidates remain, take the next one:
    - `deep`: if not `fable_ok`, add label `waiting:fable` and continue to the next candidate. Never degrade deep to Opus.
    - `shallow`: model is MODEL_EXPLORE when `fable_ok`, else MODEL_QUICKFIX (Opus).
    - Remove `waiting:fable` if present, spawn (4.6) with effort `medium` for shallow and `high` for deep, `active += 1`.
 5. Issues labelled `waiting:fable` stay in the candidate list; they start on the first run where `fable_ok` holds.
 6. **Spawn** with `mcp__Claude_Code_Remote__create_session`. Its accepted fields are exactly `append_system_prompt`, `blob_limit_kb`, `clone_depth`, `environment_id`, `extra_allowed_tools`, `model`, `outcome_branch`, `permission_mode`, `prompt`, `source_revision`, `source_url`, `sparse_checkout_paths`, `tags`, `title` (verified 2026-10-12). Set:
    - `environment_id`: ENVIRONMENT_ID (the Bonewake environment; it runs `tools/cloud_setup.sh`, so Godot and Rust exist. The Default environment has no Godot).
-   - `source_url`: `https://github.com/ltorbay/bonewake`. One repository only: the worker never sees the queue repo or the jigs repo, so everything it needs (bw id, section, class, interpretation, the full line) must already be in the issue body, and it reads its skill from that clone (`.claude/skills/pipeline-<quickfix|explore>/SKILL.md`, prompt below). `status.json` is written by triage alone.
-   - `model`: MODEL_QUICKFIX for quickfix; per 4.4 for explore.
-   - `title`: `<bw-id> #<N> <quickfix|explore>: <issue title, truncated to 60 characters>`.
-   - `tags`: explore `["pipeline:active", "bw:<bw-id>"]`; quickfix `["pipeline:quickfix", "bw:<bw-id>"]` (quickfix sessions stay out of the WIP count).
+   - `source_url`: `https://github.com/ltorbay/bonewake`. One repository only: the worker never sees the queue repo or the jigs repo, so everything it needs (bw id, section, class, interpretation, the full line) must already be in the issue body, and it reads its skill from that clone (`.claude/skills/pipeline-<quickfix|explore|ask>/SKILL.md`, prompt below). `status.json` is written by triage alone.
+   - `model`: MODEL_QUICKFIX for quickfix and ask; per 4.4 for explore.
+   - `title`: `<bw-id> #<N> <quickfix|explore|ask>: <issue title, truncated to 60 characters>`.
+   - `tags`: explore `["pipeline:active", "bw:<bw-id>"]`; quickfix `["pipeline:quickfix", "bw:<bw-id>"]`; ask `["pipeline:ask", "bw:<bw-id>"]` (quickfix and ask sessions stay out of the WIP count, not out of the load).
    - `extra_allowed_tools`, listed explicitly with the exact names you resolved with `ToolSearch`:
      - quickfix: `Bash`, `Read`, `Edit`, `Write`, `Glob`, `Grep`, `PushNotification`, and the `mcp__github__*` tools to read an issue and its comments, comment on an issue, add and remove issue labels, create a pull request, read and update a pull request, comment on a pull request, and read workflow runs and job logs.
      - explore: `Bash`, `Read`, `Edit`, `Write`, `Glob`, `Grep` (it runs git and `openspec` and writes the change directory), `PushNotification`, and the `mcp__github__*` tools to read an issue and its comments, comment on an issue, and add and remove issue labels.
+     - ask: `Bash`, `Read`, `Glob`, `Grep`, `PushNotification`, and the `mcp__github__*` tools to read an issue and its comments, comment on an issue, add and remove issue labels, and create a label.
    - Effort (explore only): there is no effort field. Make `Reasoning effort: <high|medium>` the first line of `prompt` AND of `append_system_prompt`.
-   - `append_system_prompt`: explore `Reasoning effort: <high|medium>` then the line below; quickfix the line below alone: `You are a worker of the Bonewake TODO pipeline for issue #<N> (<bw-id>) on ltorbay/bonewake. Your instructions are the skill file named in your prompt; read it first and follow it exactly.`
+   - `append_system_prompt`: explore `Reasoning effort: <high|medium>` then the line below; quickfix and ask the line below alone: `You are a worker of the Bonewake TODO pipeline for issue #<N> (<bw-id>) on ltorbay/bonewake. Your instructions are the skill file named in your prompt; read it first and follow it exactly.`
    - `prompt`, quickfix: `Read .claude/skills/pipeline-quickfix/SKILL.md in the bonewake clone in full and follow it for issue #<N> on ltorbay/bonewake (<bw-id>).`
+   - `prompt`, ask: `Read .claude/skills/pipeline-ask/SKILL.md in the bonewake clone in full and follow it for issue #<N> on ltorbay/bonewake (<bw-id>).`
    - `prompt`, explore: first line `Reasoning effort: <high|medium>`, then `Read .claude/skills/pipeline-explore/SKILL.md in the bonewake clone in full and follow it for issue #<N> on ltorbay/bonewake (<bw-id>), effort <medium|high>.`
    - Leave `outcome_branch`, `permission_mode`, `source_revision`, `clone_depth`, `sparse_checkout_paths` and `blob_limit_kb` unset unless the schema marks one required.
    - Then label the issue `in-progress` and set `status.json[id].state = in-progress`.
    - If `create_session` fails, do not label the issue `in-progress`; post a marked comment with the error and stop spawning for this run.
+7. **Quickfix candidates:** open issues labelled `quickfix` without `in-progress`, `review` or `proposed`, in TODO order (4.0). Spawn (4.6) while fewer than QUICKFIX_PER_RUN quickfix sessions were spawned this run and `load < LOAD_CAP`. No WIP count, no hold.
+8. **Ask candidates:** open issues labelled `ask` without `in-progress`, in TODO order (4.0), whatever their `asked` or `digest:scheduled` labels (both are leftovers of the retired digest; the ask session removes them). Spawn (4.6) while fewer than ASK_PER_RUN ask sessions were spawned this run and `load < LOAD_CAP`. No WIP count, no hold: the question is the hold. The session asks in its own conversation and pushes; the user's reply reclassifies the issue, and a later run routes it.
 
-### 5. Ask digest
-
-The digest posts once per day at DIGEST_TIME_PARIS (13:05 Europe/Paris, midday, inside the allowed hours). Compute both clocks at run time (`TZ=Europe/Paris date +'%u %H:%M'`, and the UTC instant of today's or tomorrow's 13:05 Paris with `date -u -d 'TZ="Europe/Paris" <YYYY-MM-DD> 13:05' +%FT%TZ`); never hardcode a UTC hour, the offset changes with daylight saving time. Track it with labels only: `digest:scheduled` (queued for today's digest) and `asked` (question posted).
-
-1. Pending = open issues labelled `ask` without `asked`.
-2. If Paris time is between 13:05 and 14:04, or this run was woken by a message saying "post the pipeline digest": for each pending issue post one marked comment holding one question that carries your best guess ("I read this as X, touching `file`. Is that right, or Y?"), label it `asked`, remove `digest:scheduled`. Then write, as your final message of the turn, the numbered list of those questions with their issue numbers and bw ids, each with your recommended answer, ending with `Reply here with a number per question (or "all as recommended").` Then call `PushNotification` with message `Pipeline digest: <n> question(s), reply here` and status `proactive`, and end the turn. The user answers IN THIS SESSION from the Claude app, never on GitHub; the issue comments are the record, not the conversation. Skip all of it when pending is empty.
-3. Otherwise, if pending is non-empty: when NO open issue (pending or not) already carries `digest:scheduled`, call `mcp__Claude_Code_Remote__send_later` to deliver `post the pipeline digest` to this session at the next 13:05 Europe/Paris (converted to UTC at run time); when one already does, an earlier run's session holds today's digest and will post every `ask` issue it finds at 13:05, so schedule nothing. In both cases label every pending issue `digest:scheduled`. One digest session per day, never one per run. If `send_later` cannot target a time or this session, skip it: the hourly run that lands between 13:05 and 14:04 Paris posts the digest by rule 2.
-4. **When the user's reply wakes this session** (the digest session re-wakes on a phone reply): parse the answers, and for each answered issue reclassify from the answer, swap the `ask` label for the new class, write the new interpretation in a marked comment that quotes the answer, then run steps 4 (gate and spawn, so a quickfix answer starts at once) and 6 (status push). "All as recommended" accepts every recommended answer. A question the reply does not cover stays `asked`. Then end the turn without a new push. The next hourly run picks up anything you could not finish. A user comment on an `asked` issue (no marker, after the question) counts as an answer too and is handled the same way on the next run; it is the fallback, not the expected path.
-
-### 6. Write status and push
+### 5. Write status and push
 
 1. Re-read `QUEUE/queue/status.json` from disk, apply every change from this run to that fresh copy (read-modify-write, never overwrite with a stale in-memory object), write it back with sorted keys and two-space indent. Write `QUEUE/queue/verify.json` the same way when step 3c changed it (keys in the order `next_seq`, `harvested_prs`, `items`, two-space indent, UTF-8 without `\u` escapes).
 2. If neither file changed, stop without committing.
 3. Set a local identity if none is configured (`git -C QUEUE config user.name "bw-pipeline"`, `user.email "bw-pipeline@users.noreply.github.com"`), then `git -C QUEUE add queue/status.json queue/verify.json`, commit `triage: <a> new, <b> updated, <c> checks`, `git -C QUEUE push origin main`.
 4. On a rejected push (the plugin pushed `TODO.md` meanwhile): `git -C QUEUE pull --rebase origin main`, push once more. Never force-push the queue.
 
-### 7. End
+### 6. End
 
-End the run with a short log: new ids by class, issues spawned (quickfix / explore with model), WIP before and after, `fable_ok`, digest action, PRs harvested and checks added, pushed sha.
+End the run with a short log: new ids by class, issues spawned (quickfix / explore with model / ask), WIP and load before and after, `fable_ok`, PRs harvested and checks added, pushed sha.
 
 ## Hard rules
 
@@ -215,7 +212,7 @@ End the run with a short log: new ids by class, issues spawned (quickfix / explo
 - Never open an issue, comment, or spawn a session for a line carrying the manual tag; a `manual` line is recorded in status.json (`human`, `issue: 0`) and nothing else.
 - Never close an issue; the user closes (or a merged PR with `Closes #N` does).
 - Never spawn a second session for an issue already labelled `in-progress` or `review`; a `proposed` issue gets exactly one more session, the apply, and only once it is `approved`.
-- One question per `ask` issue, always with your guess.
+- One question per `ask` issue, always with your guess, always asked by a pipeline-ask session, never posted by triage.
 
 ## Gotchas (2026-10-12)
 
@@ -224,7 +221,6 @@ End the run with a short log: new ids by class, issues spawned (quickfix / explo
 - **`create_session` was verified on 2026-10-12** from a routine: the field list in step 4.6 is exhaustive, `claude-fable-5-1` is accepted and the child reports `configured_model` `claude-fable-5-1`. There is no effort field and `source_url` takes one repository; both constraints shape step 4.6.
 - **Workers read their skill from the bonewake clone** (`.claude/skills/pipeline-<x>/SKILL.md` on `main`), and this routine reads its own from the same place. `ltorbay/jigs` is the public mirror of the three files; an edit reaches the pipeline only once it is on bonewake `main`. A spawned session with no marked comment on its issue within a few hours means the worker could not follow its skill.
 - **Branch cleanup is not an agent's job.** `.github/workflows/pipeline-branch-gc.yml` deletes `agent/<bw-id>` and `agent/<bw-id>-proposal` when the issue closes (any reason), keeping a branch an open PR uses and logging each deleted SHA. No pipeline agent deletes a remote branch.
-- **`send_later` targeting was not exercised.** Read its schema before the first call; do not guess field names.
 - **Issue author identity is unknown.** GitHub calls made through `mcp__github__*` may be attributed to the user's own account, so "a comment by the user" cannot be detected by login. The `<!-- bw-pipeline -->` marker is the only discriminator; never omit it.
 - **Issue creation and the status push are not atomic.** A run that dies between them leaves an issue with no status entry; the dedupe search in step 2.1 is what prevents a duplicate issue next hour. Never skip it.
-- **A reply from the phone re-wakes the session that sent the push.** That is why the digest push is the only push this routine sends, and why the digest session must be able to finish the triage of an answered issue itself: the next hourly run is a different session with no memory of the answer. Worker sessions own their own conversations the same way.
+- **A reply from the phone re-wakes the session that sent the push.** That is why every question lives in its own worker session (explore, quickfix, ask) and never in a triage run: the next hourly run is a different session with no memory of the answer. The retired digest (2026-10-13 to 2026-10-22) posted its questions as issue comments and left 13 of them unanswered for up to nine days.
