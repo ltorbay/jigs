@@ -1,4 +1,4 @@
-import { Notice, Plugin, TAbstractFile, TFile, normalizePath } from "obsidian";
+import { MarkdownFileInfo, MarkdownView, Notice, Plugin, TAbstractFile, TFile, normalizePath } from "obsidian";
 import { hiddenIdExtension } from "./editor";
 import { assignIds, highestId, isDeviceLetter, randomDeviceLetter } from "./ids";
 import { getFile, putFile, RepoTarget } from "./github";
@@ -10,6 +10,10 @@ const REMOTE_TODO = "queue/TODO.md";
 const REMOTE_STATUS = "queue/status.json";
 const REMOTE_VERIFY = "queue/verify.json";
 const DEVICE_KEY = "bw-queue-device";
+/** Quiet time after any change this device did not type before it may rewrite the TODO note. */
+const SETTLE_MS = 30_000;
+/** A vault modify this soon after a focused editor change counts as a local edit. */
+const LOCAL_EDIT_WINDOW_MS = 10_000;
 
 interface PluginData {
   settings: BwQueueSettings;
@@ -26,6 +30,9 @@ export default class BwQueuePlugin extends Plugin {
   private missingTokenNoticed = false;
   private queue: Promise<void> = Promise.resolve();
   private statusEl: HTMLElement | null = null;
+  private lastLocalEdit = 0;
+  private lastExternalChange = Date.now();
+  private settleHandle: number | null = null;
 
   async onload(): Promise<void> {
     await this.loadPluginData();
@@ -40,11 +47,15 @@ export default class BwQueuePlugin extends Plugin {
     this.addCommand({ id: "refresh-status", name: "refresh status", callback: () => this.enqueue(() => this.refreshStatus()) });
 
     this.registerEvent(this.app.vault.on("modify", (file) => this.onModify(file)));
+    this.registerEvent(this.app.workspace.on("editor-change", (_editor, info) => this.onEditorChange(info)));
     this.app.workspace.onLayoutReady(() => {
-      if (this.settings.paintOnOpen) this.enqueue(() => this.refreshStatus());
+      this.lastExternalChange = Date.now();
+      if (this.settings.paintOnOpen) this.scheduleSettled(() => this.refreshStatus());
     });
     this.registerDomEvent(document, "visibilitychange", () => {
-      if (document.visibilityState === "visible" && this.settings.statusPollMinutes > 0) this.backgroundRefresh();
+      if (document.visibilityState !== "visible") return;
+      this.lastExternalChange = Date.now();
+      if (this.settings.statusPollMinutes > 0) this.scheduleSettled(() => this.refreshStatus());
     });
     this.restartStatusPoll();
   }
@@ -58,7 +69,37 @@ export default class BwQueuePlugin extends Plugin {
 
   private backgroundRefresh(): void {
     if (this.debounceHandle !== null || !this.settings.token) return;
+    if (!this.isForeground()) return;
     this.enqueue(() => this.refreshStatus());
+  }
+
+  private isForeground(): boolean {
+    return document.visibilityState === "visible" && document.hasFocus();
+  }
+
+  /**
+   * Time left before this device may write the TODO note. Obsidian Sync merges concurrent
+   * edits textually; a device rewriting a stale copy (on open, on foreground, on a poll)
+   * produces duplicated blocks and garbled lines. Wait until incoming changes have settled.
+   */
+  private settleRemaining(): number {
+    return Math.max(0, this.lastExternalChange + SETTLE_MS - Date.now());
+  }
+
+  private scheduleSettled(task: () => Promise<void>): void {
+    if (this.settleHandle !== null) window.clearTimeout(this.settleHandle);
+    this.settleHandle = window.setTimeout(() => {
+      this.settleHandle = null;
+      if (this.settleRemaining() > 0) return this.scheduleSettled(task);
+      this.enqueue(task);
+    }, this.settleRemaining() + 50);
+  }
+
+  private deferIfUnsettled(task: () => Promise<void>): boolean {
+    if (this.settleRemaining() === 0) return false;
+    this.setStatus("bw-queue: waiting for sync to settle");
+    this.scheduleSettled(task);
+    return true;
   }
 
   private injectIdStyle(): void {
@@ -72,6 +113,7 @@ export default class BwQueuePlugin extends Plugin {
   onunload(): void {
     this.clearDebounce();
     if (this.pollHandle !== null) window.clearInterval(this.pollHandle);
+    if (this.settleHandle !== null) window.clearTimeout(this.settleHandle);
   }
 
   async saveSettings(): Promise<void> {
@@ -111,8 +153,19 @@ export default class BwQueuePlugin extends Plugin {
     if (highest > this.issuedFloor()) this.app.saveLocalStorage(this.floorKey(), highest);
   }
 
+  private onEditorChange(info: MarkdownView | MarkdownFileInfo): void {
+    if (!info.file || !this.isTodo(info.file) || !document.hasFocus()) return;
+    this.lastLocalEdit = Date.now();
+  }
+
   private onModify(file: TAbstractFile): void {
     if (this.selfWrites > 0 || !this.isTodo(file)) return;
+    if (Date.now() - this.lastLocalEdit > LOCAL_EDIT_WINDOW_MS) {
+      // Not typed here: Sync (or another app) changed the file. The device that made the
+      // edit assigns ids and pushes; this one only waits for the changes to settle.
+      this.lastExternalChange = Date.now();
+      return;
+    }
     this.clearDebounce();
     this.debounceHandle = window.setTimeout(() => {
       this.debounceHandle = null;
@@ -139,10 +192,13 @@ export default class BwQueuePlugin extends Plugin {
     this.queue = this.queue.then(task).catch((error: unknown) => this.report(error));
   }
 
-  private async writeOwn(file: TFile, content: string): Promise<void> {
+  /** Atomic read-transform-write of a note; skips the write when nothing changes. */
+  private async processOwn(file: TFile, transform: (text: string) => string): Promise<string> {
+    const current = await this.app.vault.read(file);
+    if (transform(current) === current) return current;
     this.selfWrites++;
     try {
-      await this.app.vault.modify(file, content);
+      return await this.app.vault.process(file, transform);
     } finally {
       window.setTimeout(() => this.selfWrites--, 0);
     }
@@ -173,9 +229,8 @@ export default class BwQueuePlugin extends Plugin {
   private async sync(): Promise<void> {
     const file = this.requireTodo();
     if (!file) return;
-    const original = await this.app.vault.read(file);
-    const content = assignIds(original, this.deviceLetter, this.issuedFloor());
-    if (content !== original) await this.writeOwn(file, content);
+    if (this.deferIfUnsettled(() => this.sync())) return;
+    const content = await this.processOwn(file, (text) => assignIds(text, this.deviceLetter, this.issuedFloor()));
     this.recordIssued(content);
     if (await this.push(content)) await this.refreshStatus();
   }
@@ -201,9 +256,8 @@ export default class BwQueuePlugin extends Plugin {
       return;
     }
     const status = parseStatus(remote.content);
-    const original = await this.app.vault.read(file);
-    const painted = repaint(original, status);
-    if (painted !== original) await this.writeOwn(file, painted);
+    if (this.deferIfUnsettled(() => this.refreshStatus())) return;
+    await this.processOwn(file, (text) => repaint(text, status));
     await this.pullChecks(target);
     this.setStatus(`bw-queue: status ${clock()}`);
   }

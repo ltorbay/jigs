@@ -486,6 +486,8 @@ var REMOTE_TODO = "queue/TODO.md";
 var REMOTE_STATUS = "queue/status.json";
 var REMOTE_VERIFY = "queue/verify.json";
 var DEVICE_KEY = "bw-queue-device";
+var SETTLE_MS = 3e4;
+var LOCAL_EDIT_WINDOW_MS = 1e4;
 var BwQueuePlugin = class extends import_obsidian4.Plugin {
   constructor() {
     super(...arguments);
@@ -498,6 +500,9 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
     this.missingTokenNoticed = false;
     this.queue = Promise.resolve();
     this.statusEl = null;
+    this.lastLocalEdit = 0;
+    this.lastExternalChange = Date.now();
+    this.settleHandle = null;
   }
   async onload() {
     await this.loadPluginData();
@@ -510,11 +515,15 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
     this.addCommand({ id: "push-now", name: "push now", callback: () => this.enqueue(() => this.sync()) });
     this.addCommand({ id: "refresh-status", name: "refresh status", callback: () => this.enqueue(() => this.refreshStatus()) });
     this.registerEvent(this.app.vault.on("modify", (file) => this.onModify(file)));
+    this.registerEvent(this.app.workspace.on("editor-change", (_editor, info) => this.onEditorChange(info)));
     this.app.workspace.onLayoutReady(() => {
-      if (this.settings.paintOnOpen) this.enqueue(() => this.refreshStatus());
+      this.lastExternalChange = Date.now();
+      if (this.settings.paintOnOpen) this.scheduleSettled(() => this.refreshStatus());
     });
     this.registerDomEvent(document, "visibilitychange", () => {
-      if (document.visibilityState === "visible" && this.settings.statusPollMinutes > 0) this.backgroundRefresh();
+      if (document.visibilityState !== "visible") return;
+      this.lastExternalChange = Date.now();
+      if (this.settings.statusPollMinutes > 0) this.scheduleSettled(() => this.refreshStatus());
     });
     this.restartStatusPoll();
   }
@@ -526,7 +535,33 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
   }
   backgroundRefresh() {
     if (this.debounceHandle !== null || !this.settings.token) return;
+    if (!this.isForeground()) return;
     this.enqueue(() => this.refreshStatus());
+  }
+  isForeground() {
+    return document.visibilityState === "visible" && document.hasFocus();
+  }
+  /**
+   * Time left before this device may write the TODO note. Obsidian Sync merges concurrent
+   * edits textually; a device rewriting a stale copy (on open, on foreground, on a poll)
+   * produces duplicated blocks and garbled lines. Wait until incoming changes have settled.
+   */
+  settleRemaining() {
+    return Math.max(0, this.lastExternalChange + SETTLE_MS - Date.now());
+  }
+  scheduleSettled(task) {
+    if (this.settleHandle !== null) window.clearTimeout(this.settleHandle);
+    this.settleHandle = window.setTimeout(() => {
+      this.settleHandle = null;
+      if (this.settleRemaining() > 0) return this.scheduleSettled(task);
+      this.enqueue(task);
+    }, this.settleRemaining() + 50);
+  }
+  deferIfUnsettled(task) {
+    if (this.settleRemaining() === 0) return false;
+    this.setStatus("bw-queue: waiting for sync to settle");
+    this.scheduleSettled(task);
+    return true;
   }
   injectIdStyle() {
     const style = document.createElement("style");
@@ -537,6 +572,7 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
   onunload() {
     this.clearDebounce();
     if (this.pollHandle !== null) window.clearInterval(this.pollHandle);
+    if (this.settleHandle !== null) window.clearTimeout(this.settleHandle);
   }
   async saveSettings() {
     await this.savePluginData();
@@ -568,8 +604,16 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
     const highest = highestId(content, this.deviceLetter);
     if (highest > this.issuedFloor()) this.app.saveLocalStorage(this.floorKey(), highest);
   }
+  onEditorChange(info) {
+    if (!info.file || !this.isTodo(info.file) || !document.hasFocus()) return;
+    this.lastLocalEdit = Date.now();
+  }
   onModify(file) {
     if (this.selfWrites > 0 || !this.isTodo(file)) return;
+    if (Date.now() - this.lastLocalEdit > LOCAL_EDIT_WINDOW_MS) {
+      this.lastExternalChange = Date.now();
+      return;
+    }
     this.clearDebounce();
     this.debounceHandle = window.setTimeout(() => {
       this.debounceHandle = null;
@@ -591,10 +635,13 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
   enqueue(task) {
     this.queue = this.queue.then(task).catch((error) => this.report(error));
   }
-  async writeOwn(file, content) {
+  /** Atomic read-transform-write of a note; skips the write when nothing changes. */
+  async processOwn(file, transform) {
+    const current = await this.app.vault.read(file);
+    if (transform(current) === current) return current;
     this.selfWrites++;
     try {
-      await this.app.vault.modify(file, content);
+      return await this.app.vault.process(file, transform);
     } finally {
       window.setTimeout(() => this.selfWrites--, 0);
     }
@@ -622,9 +669,8 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
   async sync() {
     const file = this.requireTodo();
     if (!file) return;
-    const original = await this.app.vault.read(file);
-    const content = assignIds(original, this.deviceLetter, this.issuedFloor());
-    if (content !== original) await this.writeOwn(file, content);
+    if (this.deferIfUnsettled(() => this.sync())) return;
+    const content = await this.processOwn(file, (text) => assignIds(text, this.deviceLetter, this.issuedFloor()));
     this.recordIssued(content);
     if (await this.push(content)) await this.refreshStatus();
   }
@@ -648,9 +694,8 @@ var BwQueuePlugin = class extends import_obsidian4.Plugin {
       return;
     }
     const status = parseStatus(remote.content);
-    const original = await this.app.vault.read(file);
-    const painted = repaint(original, status);
-    if (painted !== original) await this.writeOwn(file, painted);
+    if (this.deferIfUnsettled(() => this.refreshStatus())) return;
+    await this.processOwn(file, (text) => repaint(text, status));
     await this.pullChecks(target);
     this.setStatus(`bw-queue: status ${clock()}`);
   }
