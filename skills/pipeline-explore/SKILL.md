@@ -1,11 +1,11 @@
 ---
 name: pipeline-explore
-description: Explore worker session of the Bonewake TODO pipeline (Fable, or Opus when Fable is spent), parameterized by a GitHub issue number on ltorbay/bonewake and an effort (medium for shallow, high for deep). Investigates the code until every claim is a file:line, posts findings and at most three questions with recommended answers on the issue, notifies the phone, then turns the user's answers into an OpenSpec proposal pushed on agent/bw-NNNN-proposal. Hands the approved proposal to a separate apply session. Use when a session prompt says to follow pipeline-explore for an issue.
+description: Explore worker session of the Bonewake TODO pipeline (Fable, or Opus when Fable is spent), parameterized by a GitHub issue number on ltorbay/bonewake and an effort (medium by default, high only when the TODO line asks for it). Investigates the code until every claim is a file:line, posts findings and at most three questions with recommended answers on the issue, notifies the phone, then turns the user's answers into an OpenSpec proposal pushed on agent/bw-NNNN-proposal. Hands the approved proposal to a separate apply session. Use when a session prompt says to follow pipeline-explore for an issue.
 metadata:
   version: "1.0"
 ---
 
-You are an explore worker in the Bonewake TODO pipeline. Input: issue `#N` on `ltorbay/bonewake`, its bw id `bw-NNNN`, and an effort, `medium` (class `shallow`) or `high` (class `deep`), all in your prompt. Output: a findings comment, the user's decisions, and an OpenSpec change proposal on a branch. You write no game code. Throughout, `bw-NNNN` stands for the full id as the issue gives it, a lowercase device letter plus four digits (e.g. `bw-m0012`, branch `agent/bw-m0012`).
+You are an explore worker in the Bonewake TODO pipeline. Input: issue `#N` on `ltorbay/bonewake`, its bw id `bw-NNNN`, and an effort, `medium` (the default) or `high` (only when the TODO line asked for it), all in your prompt. The class (`shallow` or `deep`, in the issue body) sets the scope below; the effort sets only how hard you think. Output: a findings comment, the user's decisions, and an OpenSpec change proposal on a branch. You write no game code. Throughout, `bw-NNNN` stands for the full id as the issue gives it, a lowercase device letter plus four digits (e.g. `bw-m0012`, branch `agent/bw-m0012`).
 
 ## Environment
 
@@ -20,10 +20,10 @@ You are an explore worker in the Bonewake TODO pipeline. Input: issue `#N` on `l
 
 Push the moment there is something for the user, at any hour. There are no quiet hours: the user takes pushes at any hour (decided 2026-10-15), so you never check the clock before a push and never defer one. Never call `send_later`, `create_trigger`, `fire_trigger` or `delete_trigger`, under either tool name: from a worker session a connector call raises a permission prompt the user does not see until morning, and the session blocks on it (2026-10-14, bw-e0057: blocked on `send_later` scheduling its push, then again on `delete_trigger` cancelling it).
 
-## Effort
+## Scope
 
-- `medium`: one subsystem. Read the files the change lands in and their direct callers; stop when the cleanest version is clear.
-- `high`: cross-system. Also trace every consumer of the touched state (signals, serializer coverage, AI scorer and simulator parity, tripwire suites), and name the invariants in CLAUDE.md the change bends.
+- `shallow`: one subsystem. Read the files the change lands in and their direct callers; stop when the cleanest version is clear.
+- `deep`: cross-system. Also trace every consumer of the touched state (signals, serializer coverage, AI scorer and simulator parity, tripwire suites), and name the invariants in CLAUDE.md the change bends.
 
 ## Hard rules
 
@@ -43,7 +43,7 @@ Push the moment there is something for the user, at any hour. There are no quiet
    - every file the change would touch, and every suite that pins the touched behaviour (`scripts/tests/`);
    - existing specs covering it (`ls openspec/specs`, grep their text) and archived changes in the same area (`ls openspec/changes/archive | grep -i <noun>`);
    - risks: invariants in CLAUDE.md the change bends, executor/simulator parity, serializer coverage, localization, balance snapshot, device performance.
-   - for a Balance issue (`**Section:** Balance`): every current value the line touches (`.tres` field, `file:line`), the `BalanceSnapshotSuite` dict that pins it, and the pricing tools that read it (`scripts/systems/balance/`, `EncounterFitness`, the workbench tabs). The Cleanest version names concrete new values with the reason for each, and each value you picked rather than read from the line is a question with your recommended number.
+   - for a Balance issue (`**Section:** Balance`): every current value the line touches (`.tres` field, `file:line`), the `BalanceSnapshotSuite` dict that pins it, and the pricing tools that read it (`EncounterFitness`, the workbench tabs). The Cleanest version names concrete new values with the reason for each, and each value you picked rather than read from the line is a question with your recommended number.
 4. **Post findings** as one marked comment:
    ```
    <!-- bw-pipeline -->
@@ -65,7 +65,7 @@ Push the moment there is something for the user, at any hour. There are no quiet
 1. Read the reply. "Go", "ok", "yes" or "as recommended" means every recommended answer is accepted. A partial answer accepts the recommendation for each question it does not mention. A new question from the user: answer it with `file:line`, end the turn, wait again.
 2. **Propose.** In GAME: `git fetch origin main`, `git switch -c agent/bw-NNNN-proposal origin/main`. Run `/opsx:propose <kebab-name>` with a description that folds in the issue line, the cleanest version and every decision. Honour `openspec/config.yaml` `rules`: pre-enumerate every pre-existing test edit by file and method, list `.tres` files and `BalanceSnapshotSuite` dicts for any retune, add a final task naming each `CLAUDE.md` file and section to update; a `## MODIFIED Requirements` entry carries every existing scenario of that requirement verbatim. Every `file:line` and number in the proposal comes from a read in this session.
 3. `openspec validate <kebab-name> --strict` until it passes.
-4. **Commit and push** only `openspec/changes/<kebab-name>/` (explicit paths): message `docs(openspec): propose <kebab-name>` with body `Refs #N (bw-NNNN)` and the trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (`Claude Opus 5.5` when this session runs on Opus). Set a local git identity first if none is configured. `git push -u origin agent/bw-NNNN-proposal`.
+4. **Commit and push** only `openspec/changes/<kebab-name>/` (explicit paths): message `docs(openspec): propose <kebab-name>` with body `Refs #N (bw-NNNN)` and the trailer `Co-Authored-By: <the name and version of the model this session runs on> <noreply@anthropic.com>` (for example `Claude Fable 5.2` or `Claude Opus 5.5`). Set a local git identity first if none is configured. `git push -u origin agent/bw-NNNN-proposal`.
 5. **Comment** a marked proposal summary on `#N`: change name, branch, the decisions taken, the task count and the files the tasks touch. End it with: `Reply "apply" in the Claude session to hand this to a fresh Opus apply session.`
 6. **Label** the issue `proposed`; remove `in-progress`.
 7. **Recap and notify.** Final message of the turn: change name, the decisions, task count, files touched, and `Reply "apply" to start the implementation, or tell me what to change in the proposal.` Then `PushNotification` with message `Proposal ready: <kebab-name> (bw-NNNN #N)` and status `proactive`. End the turn.
@@ -78,6 +78,6 @@ Triage starts Fable sessions even when it has no fresh usage reading, so this is
 
 ## Gotchas (2026-10-12)
 
-- **This session may run on Opus instead of Fable.** Triage degrades `shallow` to Opus when Fable weekly usage is at or above 80%. The procedure is identical; only the Fable-limit section does not apply.
+- **This session may run on Opus instead of Fable.** Triage sends `shallow` to Opus when the line is in `## Balance`, when the line names Opus, or when Fable weekly usage is at or above 80%. The procedure is identical; only the Fable-limit section does not apply.
 - **`/opsx:propose` asks the user when it lacks input.** Always pass the change name and the full description so it never stops on a question the phone cannot see.
 - **The phone reply re-wakes this session**, observed in routine probes. If the reply arrives without earlier context, re-derive state from the issue comments and `git ls-remote origin agent/bw-NNNN-proposal` before acting.

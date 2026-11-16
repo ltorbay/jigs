@@ -23,7 +23,7 @@ GAME_REPO          = ltorbay/bonewake
 QUEUE_REPO         = ltorbay/bonewake-queue
 ENVIRONMENT_ID     = env_01GVFub1AjhgMuYaZA8wtFdS   # Bonewake cloud environment
 MODEL_QUICKFIX     = claude-opus-5-5
-MODEL_EXPLORE      = claude-fable-5-1   # verified 2026-10-12
+MODEL_EXPLORE      = claude-fable-5-2   # the latest Fable; raise it when a newer Fable ships (see Gotchas)
 MARKER             = <!-- bw-pipeline -->
 ```
 
@@ -53,9 +53,9 @@ Triage sends no push: every question reaches the user from the worker session th
 |---|---|---|
 | manual | the task text starts with a `(manual...)` tag | the user's own notes: no issue, no comment, no session; status only (`human`, `issue: 0`) |
 | quickfix | copy / `fr.po` / rename / wrong label / crash with a log note / `file:line` cited; no mechanic | Opus session: fix, tests, backfill delta, PR to `main` |
-| shallow | one subsystem, clear intent, no new rule | Fable medium explore, questions on the session |
-| deep | cross-system, new mechanic, rework / overhaul | Fable high explore, questions on the session |
-| human | art, pixellab, discord links, store, personal | label only |
+| shallow | one subsystem, clear intent, no new rule | medium explore, on Fable, or on Opus for a `## Balance` line (4.4), questions on the session |
+| deep | cross-system, new mechanic, rework / overhaul | Fable medium explore, questions on the session |
+| human | art the user draws by hand, discord links, store, personal | label only |
 | ask | trailing `?`, French-only without a referent, under 6 words with no noun | Opus ask session: one question with the agent's best guess, answered in the session, then a new class |
 | stale | nouns match an archived change or a recent commit | `done?` with the matching commit |
 
@@ -67,6 +67,8 @@ Unsure means `ask`, never a guess. Lines may be French or English; classify the 
 - It is `quickfix` when it names both the target and the new value (or an exact delta) and your grep finds the field without ambiguity: "Ghoul HP 30 to 25", "Kiln cost -1", "baisser les dégâts de X à 4".
 - It is `shallow` when it names a target and a direction but no value ("buff the Marksman T2", "X is too strong"), or when it touches one template, engraving, boon or encounter. It is `deep` when it retunes a whole archetype, act, economy or AI weight profile, or asks for a new mechanic.
 - It is never `ask`, including lines ending in `?` and lines in French: the explore session asks its questions with a recommended value.
+
+**PixelLab lines are agent work** (decided 2026-10-23; before that every art or PixelLab line was `human`). PixelLab now runs in the cloud sessions, so a line that asks to generate, regenerate or vary a sprite, icon, floor hazard or UI panel takes the ordinary classes like any other line, and the worker follows the matching `pixellab-*` skill in GAME `.claude/skills/` (`pixellab-sprite`, `pixellab-icon`, `pixellab-floor-hazard`, `pixellab-ui-panel`). Only art the user draws by hand stays `human`.
 
 **Named change means quickfix.** A line that names its exact change, and whose code location your grep finds without ambiguity, is `quickfix` even outside the obvious copy cases: a rename ("rename X", "renommer X"), a removal ("remove the X support"), a swap ("show X instead of Y", "X should be in the undead faction"), a toggle ("enable long press on X"). It stays `shallow` when doing it requires choosing between behaviours, adding a rule the game does not have, touching AI scoring, or picking a balance value the line does not name.
 
@@ -170,9 +172,14 @@ Worker PR bodies carry a Manual check block (`docs/PIPELINE.md` brief E1). This 
    - fewer than HOLD_HOURS have passed since its latest pipeline comment or, with none, since the issue was created;
    - any comment after the latest pipeline-authored one lacks the marker (a user correction). Handle it instead: re-read the line with the correction, reclassify or rewrite the interpretation in a new marked comment ("Updated interpretation: ..."), relabel if the class changed. The hold restarts from that comment.
 4. While `active < WIP_LIMIT`, `load < LOAD_CAP` and candidates remain, take the next one:
-   - `deep`: if not `fable_ok`, add label `waiting:fable` and continue to the next candidate. Never degrade deep to Opus.
-   - `shallow`: model is MODEL_EXPLORE when `fable_ok`, else MODEL_QUICKFIX (Opus).
-   - Remove `waiting:fable` if present, spawn (4.6) with effort `medium` for shallow and `high` for deep, `active += 1`.
+   - **Model.** `deep` runs on MODEL_EXPLORE. `shallow` runs on MODEL_QUICKFIX (Opus) when its TODO line is in the `## Balance` section or when not `fable_ok`, and on MODEL_EXPLORE otherwise. A shallow Balance item is one target and a direction: the session reads a few numbers and recommends a value, and Opus does that well.
+   - **Effort.** `medium`, for every explore, whatever its class and its model. The class sets the scope of the investigation, not the effort. Never infer `high` from the item's size, the systems it touches or its history.
+   - **The TODO line overrides both, and only the line does.** Read the line's own words, not your interpretation of them:
+     - it asks for more thought ("think hard", "high effort", "réfléchis bien", "(high)"): effort `high`;
+     - it names a model ("(opus)", "on Opus", "(fable)", "fable 5.1"): that model. A bare "fable" is MODEL_EXPLORE; a Fable version is `claude-fable-<major>-<minor>`; "opus" is MODEL_QUICKFIX.
+   - **Fable gate.** When the chosen model is a Fable and not `fable_ok`: a `deep` item, or any item whose line names Fable, gets the label `waiting:fable`, and you continue to the next candidate. Never degrade those to Opus. A `deep` item whose line names Opus is not gated.
+   - Remove `waiting:fable` if present, spawn (4.6), `active += 1`.
+   - Name the model and the effort in the issue's marked comment for this spawn and, for any value that is not the default, quote the words of the line that set it.
 5. Issues labelled `waiting:fable` stay in the candidate list; they start on the first run where `fable_ok` holds.
 6. **Spawn** with `mcp__Claude_Code_Remote__create_session`. Its accepted fields are exactly `append_system_prompt`, `blob_limit_kb`, `clone_depth`, `environment_id`, `extra_allowed_tools`, `model`, `outcome_branch`, `permission_mode`, `prompt`, `source_revision`, `source_url`, `sparse_checkout_paths`, `tags`, `title` (verified 2026-10-12). Set:
    - `environment_id`: ENVIRONMENT_ID (the Bonewake environment; it runs `tools/cloud_setup.sh`, so Godot and Rust exist. The Default environment has no Godot).
@@ -219,6 +226,7 @@ End the run with a short log: new ids by class, issues spawned (quickfix / explo
 - **The Claude_Code_Remote connector has two tool names in child sessions**: `mcp__Claude_Code_Remote__<tool>` and the raw `mcp__bf7c680d-5fdc-5ef4-b4a0-abadb619bf0a__<tool>`. Children called the raw form, which an allow list naming only the friendly form does not cover, and every call raised a permission prompt on the user's phone. Grant both forms for any connector tool a child needs.
 
 - **`create_session` was verified on 2026-10-12** from a routine: the field list in step 4.6 is exhaustive, `claude-fable-5-1` is accepted and the child reports `configured_model` `claude-fable-5-1`. There is no effort field and `source_url` takes one repository; both constraints shape step 4.6.
+- **MODEL_EXPLORE follows the latest Fable by hand.** No tool lists the models, so the constant is the only source: when a newer Fable ships, change that one line. `claude-fable-5-2` (set 2026-11-11) is not yet verified from a routine. If `create_session` refuses it, step 4.6 already posts the error and stops the spawns of that run; do not fall back to an older Fable by yourself.
 - **Workers read their skill from the bonewake clone** (`.claude/skills/pipeline-<x>/SKILL.md` on `main`), and this routine reads its own from the same place. `ltorbay/jigs` is the public mirror of the three files; an edit reaches the pipeline only once it is on bonewake `main`. A spawned session with no marked comment on its issue within a few hours means the worker could not follow its skill.
 - **Branch cleanup is not an agent's job.** `.github/workflows/pipeline-branch-gc.yml` deletes `agent/<bw-id>` and `agent/<bw-id>-proposal` when the issue closes (any reason), keeping a branch an open PR uses and logging each deleted SHA. No pipeline agent deletes a remote branch.
 - **Issue author identity is unknown.** GitHub calls made through `mcp__github__*` may be attributed to the user's own account, so "a comment by the user" cannot be detected by login. The `<!-- bw-pipeline -->` marker is the only discriminator; never omit it.
